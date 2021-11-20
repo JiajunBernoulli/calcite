@@ -104,14 +104,15 @@ public class TypeCoercionImpl extends AbstractTypeCoercion {
       updateInferredColumnType(scope1, query, columnIndex, targetType);
       return true;
     case VALUES:
+      boolean coercedValues = true;
       for (SqlNode rowConstructor : ((SqlCall) query).getOperandList()) {
         if (!coerceOperandType(scope, (SqlCall) rowConstructor, columnIndex, targetType)) {
-          return false;
+          coercedValues = false;
         }
       }
       updateInferredColumnType(
           requireNonNull(scope, "scope"), query, columnIndex, targetType);
-      return true;
+      return coercedValues;
     case WITH:
       SqlNode body = ((SqlWith) query).body;
       return rowTypeCoercion(validator.getOverScope(query), body, columnIndex, targetType);
@@ -121,8 +122,9 @@ public class TypeCoercionImpl extends AbstractTypeCoercion {
       // Set operations are binary for now.
       final SqlCall operand0 = ((SqlCall) query).operand(0);
       final SqlCall operand1 = ((SqlCall) query).operand(1);
-      final boolean coerced = rowTypeCoercion(scope, operand0, columnIndex, targetType)
-          && rowTypeCoercion(scope, operand1, columnIndex, targetType);
+      @SuppressWarnings("ShortCircuitBoolean")
+      boolean coerced = rowTypeCoercion(scope, operand0, columnIndex, targetType)
+          | rowTypeCoercion(scope, operand1, columnIndex, targetType);
       // Update the nested SET operator node type.
       if (coerced) {
         updateInferredColumnType(

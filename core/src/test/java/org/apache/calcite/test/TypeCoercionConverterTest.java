@@ -16,9 +16,16 @@
  */
 package org.apache.calcite.test;
 
+import org.apache.calcite.prepare.Prepare;
+import org.apache.calcite.rel.type.RelDataTypeFactory;
+import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.sql.validate.SqlValidator;
 import org.apache.calcite.sql.validate.implicit.TypeCoercion;
+import org.apache.calcite.util.TestUtil;
 
 import org.junit.jupiter.api.Test;
+
+import java.util.Objects;
 
 /**
  * Test cases for implicit type coercion converter. see {@link TypeCoercion} doc
@@ -124,6 +131,38 @@ class TypeCoercionConverterTest extends SqlToRelTestBase {
     checkPlanEquals(sql);
   }
 
+  @Test void testInsertUnionQuerySourceCoercion() {
+    final String sql = "insert into t1 "
+        + "select 'a', 1, 1.0,"
+        + " 0, 0, 0, 0, TIMESTAMP '2021-11-28 00:00:00', date '2021-11-28', x'0A', false union "
+        + "select 'b', 2, 2,"
+        + " 0, 0, 0, 0, TIMESTAMP '2021-11-28 00:00:00', date '2021-11-28', x'0A', false union "
+        + "select 'c', CAST(3 AS SMALLINT), 3.0,"
+        + " 0, 0, 0, 0, TIMESTAMP '2021-11-28 00:00:00', date '2021-11-28', x'0A', false union "
+        + "select 'd', 4, 4.0,"
+        + " 0, 0, 0, 0, TIMESTAMP '2021-11-28 00:00:00', date '2021-11-28', x'0A', false union "
+        + "select 'e', 5, 5.0,"
+        + " 0, 0, 0, 0, TIMESTAMP '2021-11-28 00:00:00', date '2021-11-28', x'0A', false";
+    checkValidateSqlEquals(sql);
+    checkPlanEquals(sql);
+  }
+
+  @Test void testInsertValuesQuerySourceCoercion() {
+    final String sql = "insert into t1 values "
+        + "('a', 1, 1.0,"
+        + " 0, 0, 0, 0, TIMESTAMP '2021-11-28 00:00:00', date '2021-11-28', x'0A', false), "
+        + "('b', 2,  2,"
+        + " 0, 0, 0, 0, TIMESTAMP '2021-11-28 00:00:00', date '2021-11-28', x'0A', false), "
+        + "('c', CAST(3 AS SMALLINT),  3.0,"
+        + " 0, 0, 0, 0, TIMESTAMP '2021-11-28 00:00:00', date '2021-11-28', x'0A', false), "
+        + "('d', 4, 4.0,"
+        + " 0, 0, 0, 0, TIMESTAMP '2021-11-28 00:00:00', date '2021-11-28', x'0A', false), "
+        + "('e', 5, 5.0,"
+        + " 0, 0, 0, 0, TIMESTAMP '2021-11-28 00:00:00', date '2021-11-28', x'0A', false)";
+    checkValidateSqlEquals(sql);
+    checkPlanEquals(sql);
+  }
+
   @Test void testUpdateQuerySourceCoercion() {
     final String sql = "update t1 set t1_varchar20=123, "
         + "t1_date=TIMESTAMP '2020-01-03 10:14:34', t1_int=12.3";
@@ -132,5 +171,21 @@ class TypeCoercionConverterTest extends SqlToRelTestBase {
 
   private void checkPlanEquals(String sql) {
     tester.assertConvertsTo(sql, "${plan}");
+  }
+
+  private void checkValidateSqlEquals(String sql) {
+    Objects.requireNonNull(sql, "sql");
+    try {
+      final SqlNode sqlQuery = tester.parseQuery(sql);
+      final RelDataTypeFactory typeFactory = tester.getValidator().getTypeFactory();
+      final Prepare.CatalogReader catalogReader =
+          tester.createCatalogReader(typeFactory);
+      final SqlValidator validator =
+          tester.createValidator(catalogReader, typeFactory);
+      final String actual = validator.validate(sqlQuery).toString();
+      tester.getDiffRepos().assertEquals("validatedSql", "${validatedSql}", actual);
+    } catch (Throwable e) {
+      TestUtil.rethrow(e, "sql=" + sql);
+    }
   }
 }
