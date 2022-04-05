@@ -644,6 +644,11 @@ public class RelMetadataTest {
     fixture.assertThatRowCount(is(9D), is(0D), is(10d));
   }
 
+  @Test void testRowCountSortLimitOffsetDynamic() {
+    final String sql = "select * from emp order by ename limit ? offset ?";
+    sql(sql).assertThatRowCount(is(14D), is(0D), is(Double.POSITIVE_INFINITY));
+  }
+
   @Test void testRowCountSortLimitOffsetOnFinite() {
     final String sql = "select * from (select * from emp limit 12)\n"
         + "order by ename limit 20 offset 5";

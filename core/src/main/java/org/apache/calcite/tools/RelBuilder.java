@@ -70,6 +70,7 @@ import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexCallBinding;
 import org.apache.calcite.rex.RexCorrelVariable;
+import org.apache.calcite.rex.RexDynamicParam;
 import org.apache.calcite.rex.RexExecutor;
 import org.apache.calcite.rex.RexFieldCollation;
 import org.apache.calcite.rex.RexInputRef;
@@ -3196,12 +3197,23 @@ public class RelBuilder {
    */
   public RelBuilder sortLimit(int offset, int fetch,
       Iterable<? extends RexNode> nodes) {
+    return sortLimit(offset, fetch, nodes, null, null);
+  }
+
+  public RelBuilder sortLimit(int offset, int fetch,
+      Iterable<? extends RexNode> nodes,
+      @Nullable RexDynamicParam dynamicOffset,
+      @Nullable RexDynamicParam dynamicFetch) {
     final Registrar registrar = new Registrar(fields(), ImmutableList.of());
     final List<RelFieldCollation> fieldCollations =
         registrar.registerFieldCollations(nodes);
 
-    final RexNode offsetNode = offset <= 0 ? null : literal(offset);
-    final RexNode fetchNode = fetch < 0 ? null : literal(fetch);
+    final RexNode offsetNode = offset <= 0
+        ? dynamicOffset != null ? dynamicOffset : null
+        : literal(offset);
+    final RexNode fetchNode = fetch < 0
+        ? dynamicFetch != null ? dynamicFetch : null
+        : literal(fetch);
     if (offsetNode == null && fetch == 0 && config.simplifyLimit()) {
       return empty();
     }

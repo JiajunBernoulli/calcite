@@ -64,6 +64,7 @@ import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexCorrelVariable;
+import org.apache.calcite.rex.RexDynamicParam;
 import org.apache.calcite.rex.RexFieldAccess;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexLiteral;
@@ -476,14 +477,29 @@ public class RelDecorrelator implements ReflectiveVisitor {
 
     RelCollation oldCollation = rel.getCollation();
     RelCollation newCollation = RexUtil.apply(mapping, oldCollation);
-
-    final int offset = rel.offset == null ? -1 : RexLiteral.intValue(rel.offset);
-    final int fetch = rel.fetch == null ? -1 : RexLiteral.intValue(rel.fetch);
+    int offset = -1;
+    RexDynamicParam dynamicOffset = null;
+    if (rel.offset != null) {
+      if (rel.offset instanceof RexDynamicParam) {
+        dynamicOffset = (RexDynamicParam) rel.offset;
+      } else {
+        offset = RexLiteral.intValue(rel.offset);
+      }
+    }
+    int fetch = -1;
+    RexDynamicParam dynamicFetch = null;
+    if (rel.fetch != null) {
+      if (rel.fetch instanceof RexDynamicParam) {
+        dynamicFetch = (RexDynamicParam) rel.fetch;
+      } else {
+        fetch = RexLiteral.intValue(rel.fetch);
+      }
+    }
 
     final RelNode newSort = relBuilder
-            .push(newInput)
-            .sortLimit(offset, fetch, relBuilder.fields(newCollation))
-            .build();
+        .push(newInput)
+        .sortLimit(offset, fetch, relBuilder.fields(newCollation), dynamicOffset, dynamicFetch)
+        .build();
 
     // Sort does not change input ordering
     return register(rel, newSort, frame.oldToNewOutputs, frame.corDefOutputs);
