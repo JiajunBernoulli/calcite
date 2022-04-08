@@ -645,8 +645,12 @@ public class RelMetadataTest {
   }
 
   @Test void testRowCountSortLimitOffsetDynamic() {
-    final String sql = "select * from emp order by ename limit ? offset ?";
-    sql(sql).assertThatRowCount(is(14D), is(0D), is(Double.POSITIVE_INFINITY));
+    sql("select * from emp order by ename limit ? offset ?")
+        .assertThatRowCount(is(14D), is(0D), is(Double.POSITIVE_INFINITY));
+    sql("select * from emp order by ename limit 1 offset ?")
+        .assertThatRowCount(is(1.0D), is(0D), is(1D));
+    sql("select * from emp order by ename limit ? offset 1")
+        .assertThatRowCount(is(13D), is(0D), is(Double.POSITIVE_INFINITY));
   }
 
   @Test void testRowCountSortLimitOffsetOnFinite() {

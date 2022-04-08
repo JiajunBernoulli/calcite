@@ -4366,9 +4366,9 @@ public class RelBuilderTest {
 
     RelNode planBefore = relBuilder
         .scan("DEPT")
-        .sortLimit(-1, -1, ImmutableList.of(),
-            rexBuilder.makeDynamicParam(intType, 1),
-            rexBuilder.makeDynamicParam(intType, 0))
+        .sortLimit(rexBuilder.makeDynamicParam(intType, 1),
+            rexBuilder.makeDynamicParam(intType, 0),
+            ImmutableList.of())
         .build();
     String expectedLogicalPlan = "LogicalSort(offset=[?1], fetch=[?0])\n"
         + "  LogicalTableScan(table=[[scott, DEPT]])\n";
