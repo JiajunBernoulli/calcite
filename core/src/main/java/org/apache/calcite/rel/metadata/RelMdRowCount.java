@@ -33,6 +33,7 @@ import org.apache.calcite.rel.core.TableModify;
 import org.apache.calcite.rel.core.TableScan;
 import org.apache.calcite.rel.core.Union;
 import org.apache.calcite.rel.core.Values;
+import org.apache.calcite.rex.RexDynamicParam;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.util.Bug;
 import org.apache.calcite.util.ImmutableBitSet;
@@ -146,13 +147,22 @@ public class RelMdRowCount
     if (rowCount == null) {
       return null;
     }
-
-    final int offset = rel.offset instanceof RexLiteral ? RexLiteral.intValue(rel.offset) : 0;
+    if (rel.offset instanceof RexDynamicParam) {
+      return rowCount;
+    }
+    final int offset = rel.offset == null ? 0 : RexLiteral.intValue(rel.offset);
     rowCount = Math.max(rowCount - offset, 0D);
 
-    final double limit =
-        rel.fetch instanceof RexLiteral ? RexLiteral.intValue(rel.fetch) : rowCount;
-    return limit < rowCount ? limit : rowCount;
+    if (rel.fetch != null) {
+      if (rel.fetch instanceof RexDynamicParam) {
+        return rowCount;
+      }
+      final int limit = RexLiteral.intValue(rel.fetch);
+      if (limit < rowCount) {
+        return (double) limit;
+      }
+    }
+    return rowCount;
   }
 
   public @Nullable Double getRowCount(EnumerableLimit rel, RelMetadataQuery mq) {
@@ -160,13 +170,22 @@ public class RelMdRowCount
     if (rowCount == null) {
       return null;
     }
-
-    final int offset = rel.offset instanceof RexLiteral ? RexLiteral.intValue(rel.offset) : 0;
+    if (rel.offset instanceof RexDynamicParam) {
+      return rowCount;
+    }
+    final int offset = rel.offset == null ? 0 : RexLiteral.intValue(rel.offset);
     rowCount = Math.max(rowCount - offset, 0D);
 
-    final double limit =
-        rel.fetch instanceof RexLiteral ? RexLiteral.intValue(rel.fetch) : rowCount;
-    return limit < rowCount ? limit : rowCount;
+    if (rel.fetch != null) {
+      if (rel.fetch instanceof RexDynamicParam) {
+        return rowCount;
+      }
+      final int limit = RexLiteral.intValue(rel.fetch);
+      if (limit < rowCount) {
+        return (double) limit;
+      }
+    }
+    return rowCount;
   }
 
   // Covers Converter, Interpreter

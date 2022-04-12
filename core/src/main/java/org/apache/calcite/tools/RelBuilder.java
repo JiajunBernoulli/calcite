@@ -3199,9 +3199,6 @@ public class RelBuilder {
       Iterable<? extends RexNode> nodes) {
     final @Nullable RexNode offsetNode = offset <= 0 ? null : literal(offset);
     final @Nullable RexNode fetchNode = fetch < 0 ? null : literal(fetch);
-    if (offsetNode == null && fetch == 0 && config.simplifyLimit()) {
-      return empty();
-    }
     return sortLimit(offsetNode, fetchNode, nodes);
   }
 
