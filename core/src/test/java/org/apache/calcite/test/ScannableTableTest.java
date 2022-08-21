@@ -16,12 +16,17 @@
  */
 package org.apache.calcite.test;
 
+import java.util.ArrayList;
+
 import org.apache.calcite.DataContext;
+import org.apache.calcite.interpreter.BindableConvention;
 import org.apache.calcite.jdbc.CalciteConnection;
 import org.apache.calcite.linq4j.AbstractEnumerable;
 import org.apache.calcite.linq4j.DelegatingEnumerator;
 import org.apache.calcite.linq4j.Enumerable;
 import org.apache.calcite.linq4j.Enumerator;
+import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.rel2sql.RelToSqlConverter;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rex.RexCall;
@@ -37,9 +42,13 @@ import org.apache.calcite.schema.SchemaPlus;
 import org.apache.calcite.schema.Table;
 import org.apache.calcite.schema.impl.AbstractSchema;
 import org.apache.calcite.schema.impl.AbstractTable;
+import org.apache.calcite.sql.SqlDialect;
+import org.apache.calcite.sql.SqlDialect.DatabaseProduct;
+import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.test.CalciteAssert.ConnectionPostProcessor;
+import org.apache.calcite.tools.Programs;
 import org.apache.calcite.util.NlsString;
 import org.apache.calcite.util.Pair;
 
@@ -468,6 +477,39 @@ public class ScannableTableTest {
       assertThat(resultSet,
           Matchers.returnsUnordered("i=0", "i=10", "i=20"));
       assertThat(scanCount.get(), is(3));
+    }
+  }
+
+  @Test void testBindableToSql() {
+    final StringBuilder buf = new StringBuilder();
+    final Table table = new BeatlesProjectableFilterableTable(buf, true);
+    try (Hook.Closeable ignored = Hook.ENABLE_BINDABLE.addThread(Hook.propertyJ(true))) {
+      final String explain = "PLAN="
+          + "BindableTableScan(table=[[s, beatles]], filters=[[=($1, 'John')]], projects=[[1]])";
+      CalciteAssert.that()
+          .with(newSchema("s", Pair.of("beatles", table)))
+          .query("select \"j\" from \"s\".\"beatles\" where \"j\" = 'John'")
+          .explainContains(explain)
+          .convertMatches(rel ->
+          {
+            RelNode bindTableScan = Programs
+                .standard()
+                .run(rel.getCluster().getPlanner(),
+                    rel,
+                    rel.getTraitSet()
+                        .replace(BindableConvention.INSTANCE),
+                    new ArrayList<>(),
+                    new ArrayList<>());
+            RelToSqlConverter converter = new
+                RelToSqlConverter(SqlDialect.DatabaseProduct.CALCITE.getDialect());
+            SqlNode sqlNode = converter.visitRoot(bindTableScan).asStatement();
+            String actual = sqlNode.toSqlString(DatabaseProduct.CALCITE.getDialect()).getSql();
+            assertThat(actual,
+                is("SELECT *\n"
+                        + "FROM \"s\".\"beatles\""
+//                    + "WHERE \"j\" = 'John'"
+                ));
+          });
     }
   }
 
