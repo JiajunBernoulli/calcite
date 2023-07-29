@@ -2256,10 +2256,10 @@ public class SqlValidatorImpl implements SqlValidatorWithHints {
       @Nullable String alias,
       SqlValidatorNamespace ns,
       boolean forceNullable) {
-    final SqlNode sqlNode = requireNonNull(ns.getNode(), () -> "ns.getNode() for " + ns);
-    SqlValidatorNamespace namespace = namespaces.get(sqlNode);
+    SqlValidatorNamespace namespace =
+        namespaces.get(requireNonNull(ns.getNode(), () -> "ns.getNode() for " + ns));
     if (namespace == null) {
-      namespaces.put(sqlNode, ns);
+      namespaces.put(ns.getNode(), ns);
       namespace = ns;
     }
     if (usingScope != null) {
@@ -5274,7 +5274,7 @@ public class SqlValidatorImpl implements SqlValidatorWithHints {
     SqlInsert insertCallAfterValidate = call.getInsertCall();
     if (insertCallAfterValidate != null) {
       validateInsert(insertCallAfterValidate);
-      // Validate NULL
+      // Throw if select list contains NULL literal and target is NOT NULL
       if (insertCallAfterValidate.getSource() instanceof SqlSelect) {
         final SqlSelect sourceSelect = (SqlSelect) insertCallAfterValidate.getSource();
         final SqlNodeList sourceSelectList = sourceSelect.getSelectList();

@@ -4509,7 +4509,13 @@ LogicalAggregate(group=[{0}], C=[AGGREGATE($1)])
   </TestCase>
   <TestCase name="testMerge">
     <Resource name="sql">
-      <![CDATA[merge into empnullables e using (select * from emp where deptno is null) t on e.empno = t.empno when matched then update set ename = t.ename, deptno = t.deptno, sal = t.sal * .1 when not matched then insert (empno, ename, deptno, sal) values(t.empno, t.ename, 10, t.sal * .15)]]>
+      <![CDATA[merge into empnullables e
+using (select * from emp where deptno is null) t
+on e.empno = t.empno
+when matched then update
+set ename = t.ename, deptno = t.deptno, sal = t.sal * .1
+when not matched then insert (empno, ename, deptno, sal)
+values(t.empno, t.ename, 10, t.sal * .15)]]>
     </Resource>
     <Resource name="plan">
       <![CDATA[
