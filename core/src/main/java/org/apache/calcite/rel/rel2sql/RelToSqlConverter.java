@@ -189,12 +189,17 @@ public class RelToSqlConverter extends SqlImplementor
     }
 
     @Override public SqlNode visit(SqlIdentifier id) {
+      SqlNodeList source = requireNonNull(replaceSource, "replaceSource");
+      SqlNode firstItem = source.get(0);
+      if (firstItem instanceof SqlIdentifier && ((SqlIdentifier) firstItem).isStar()) {
+        return id;
+      }
       if (tableAlias.equals(id.names.get(0))) {
         int index = requireNonNull(
             tableType.getField(id.names.get(1), false, false),
             () -> "field " + id.names.get(1) + " is not found in " + tableType)
             .getIndex();
-        SqlNode selectItem = requireNonNull(replaceSource, "replaceSource").get(index);
+        SqlNode selectItem = source.get(index);
         if (selectItem.getKind() == SqlKind.AS) {
           selectItem = ((SqlCall) selectItem).operand(0);
         }
@@ -293,7 +298,7 @@ public class RelToSqlConverter extends SqlImplementor
     final SqlNode resultNode =
         leftResult.neededAlias == null ? sqlSelect
             : as(sqlSelect, leftResult.neededAlias);
-    return result(resultNode, leftResult, rightResult);
+    return result(resultNode,  ImmutableList.of(Clause.FROM), e, null);
   }
 
   /** Returns whether this join should be unparsed as a {@link JoinType#COMMA}.
@@ -799,8 +804,10 @@ public class RelToSqlConverter extends SqlImplementor
       } else if (list.size() == 1) {
         query = list.get(0);
       } else {
-        query = SqlStdOperatorTable.UNION_ALL.createCall(
-            new SqlNodeList(list, POS));
+        query = list.stream()
+            .map(select -> (SqlNode) select)
+            .reduce((l, r) -> SqlStdOperatorTable.UNION_ALL.createCall(POS, l, r))
+            .get();
       }
     } else {
       // Generate ANSI syntax
@@ -899,7 +906,8 @@ public class RelToSqlConverter extends SqlImplementor
                   sort2,
                   ImmutableList.of(),
                   project.getProjects(),
-                  project.getRowType());
+                  project.getRowType(),
+                  project.getVariablesSet());
           return visit(project2);
         }
       }
@@ -1179,7 +1187,7 @@ public class RelToSqlConverter extends SqlImplementor
   @Override public void addSelect(List<SqlNode> selectList, SqlNode node,
       RelDataType rowType) {
     String name = rowType.getFieldNames().get(selectList.size());
-    String alias = SqlValidatorUtil.getAlias(node, -1);
+    @Nullable String alias = SqlValidatorUtil.alias(node);
     if (alias == null || !alias.equals(name)) {
       node = as(node, name);
     }

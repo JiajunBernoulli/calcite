@@ -1,3 +1,4 @@
+# measure.iq - measure expressions
 #
 # Licensed to the Apache Software Foundation (ASF) under one or more
 # contributor license agreements.  See the NOTICE file distributed with
@@ -14,32 +15,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+!set outputformat mysql
+!use scott
 
-# Configuration file for Appveyor continuous integration.
-version: '{build}'
-image: Visual Studio 2019
-clone_depth: 100
-# Space and plus are here to catch unit tests that fail to support folders with spaces
-clone_folder: C:\projects\calcite +
-# branches to build
-init:
-# We expect that Windows would have CRLF for newlines, so autocrlf=true should be used
-# to automatically convert text files to CRLF on checkout
-  - git config --global core.autocrlf true
-branches:
-  # whitelist
-  only:
-    - main
-    - javadoc
-    - /^branch-.*$/
-    - /^[0-9]+-.*$/
-matrix:
-  fast_finish: true
-environment:
-  matrix:
-    - JAVA_HOME: C:\Program Files\Java\jdk1.8.0
-    - JAVA_HOME: C:\Program Files\Java\jdk16
-build_script:
-  - ./gradlew assemble javadoc
-test_script:
-  - ./gradlew check
+!if (false) {
+
+# Measure that references another measure
+select *
+from (
+  select deptno,
+    empno + 1 as measure e1,
+    e1 + deptno as measure e2
+  from "scott".emp
+  where deptno = 10);
++--------+------+------+
+| DEPTNO | E1   | E2   |
++--------+------+------+
+|     10 | 7783 | 7793 |
+|     10 | 7840 | 7850 |
+|     10 | 7935 | 7945 |
++--------+------+------+
+(3 rows)
+
+!ok
+
+!}
+
+# End measure.iq

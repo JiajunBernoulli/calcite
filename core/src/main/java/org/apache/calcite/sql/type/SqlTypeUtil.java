@@ -141,6 +141,28 @@ public abstract class SqlTypeUtil {
   }
 
   /**
+   * Derives component type for ARRAY, MULTISET, MAP when input is sub-query.
+   *
+   * @param origin original component type
+   * @return component type
+   */
+  public static RelDataType deriveCollectionQueryComponentType(
+      SqlTypeName collectionType,
+      RelDataType origin) {
+    switch (collectionType) {
+    case ARRAY:
+    case MULTISET:
+      return origin.isStruct() && origin.getFieldCount() == 1
+          ? origin.getFieldList().get(0).getType() : origin;
+    case MAP:
+      return origin;
+    default:
+      throw new AssertionError(
+          "Impossible to derive component type for " + collectionType);
+    }
+  }
+
+  /**
    * Iterates over all operands, derives their types, and collects them into
    * a list.
    */
@@ -905,10 +927,9 @@ public abstract class SqlTypeUtil {
     RelDataType c1 = toType.getComponentType();
     if (c1 != null) {
       RelDataType c2 = fromType.getComponentType();
-      if (c2 == null) {
-        return false;
+      if (c2 != null) {
+        return canCastFrom(c1, c2, coerce);
       }
-      return canCastFrom(c1, c2, coerce);
     }
     if ((isInterval(fromType) && isExactNumeric(toType))
         || (isInterval(toType) && isExactNumeric(fromType))) {
@@ -1064,7 +1085,9 @@ public abstract class SqlTypeUtil {
     assert typeName != null;
 
     final SqlTypeNameSpec typeNameSpec;
-    if (isAtomic(type) || isNull(type) || type.getSqlTypeName() == SqlTypeName.UNKNOWN) {
+    if (isAtomic(type) || isNull(type)
+        || type.getSqlTypeName() == SqlTypeName.UNKNOWN
+        || type.getSqlTypeName() == SqlTypeName.GEOMETRY) {
       int precision = typeName.allowsPrec() ? type.getPrecision() : -1;
       // fix up the precision.
       if (maxPrecision > 0 && precision > maxPrecision) {
