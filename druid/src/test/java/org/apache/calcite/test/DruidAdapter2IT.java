@@ -2034,6 +2034,7 @@ public class DruidAdapter2IT {
         "store_state=WA; brand_name=ADJ; A=216.9912",
         "store_state=CA; brand_name=Akron; A=250.349",
         "store_state=OR; brand_name=Akron; A=278.6972");
+    // Failed?
   }
 
   @Test void testOrderByOnMetricsInSelectDruidQuery() {
