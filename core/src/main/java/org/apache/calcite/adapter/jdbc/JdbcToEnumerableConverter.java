@@ -22,6 +22,7 @@ import org.apache.calcite.adapter.enumerable.EnumerableRelImplementor;
 import org.apache.calcite.adapter.enumerable.JavaRowFormat;
 import org.apache.calcite.adapter.enumerable.PhysType;
 import org.apache.calcite.adapter.enumerable.PhysTypeImpl;
+import org.apache.calcite.adapter.enumerable.RexImpTable;
 import org.apache.calcite.adapter.java.JavaTypeFactory;
 import org.apache.calcite.config.CalciteSystemProperty;
 import org.apache.calcite.linq4j.tree.BlockBuilder;
@@ -278,6 +279,9 @@ public class JdbcToEnumerableConverter
           java.sql.Array.class);
       source = Expressions.call(BuiltInMethod.JDBC_ARRAY_TO_LIST.method, x);
       break;
+    case NULL:
+      source = RexImpTable.NULL_EXPR;
+      break;
     default:
       source = Expressions.call(
           resultSet_, jdbcGetMethod(primitive), Expressions.constant(i + 1));
@@ -304,8 +308,12 @@ public class JdbcToEnumerableConverter
     switch (sqlTypeName) {
     case DATE:
       return (nullable
-          ? BuiltInMethod.DATE_TO_INT_OPTIONAL
-          : BuiltInMethod.DATE_TO_INT).method;
+          ? (offset
+          ? BuiltInMethod.DATE_TO_INT_OPTIONAL_OFFSET
+          : BuiltInMethod.DATE_TO_INT_OPTIONAL)
+          : (offset
+              ? BuiltInMethod.DATE_TO_INT_OFFSET
+              : BuiltInMethod.DATE_TO_INT)).method;
     case TIME:
       return (nullable
           ? BuiltInMethod.TIME_TO_INT_OPTIONAL

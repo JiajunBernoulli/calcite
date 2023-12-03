@@ -25,6 +25,7 @@ import org.apache.calcite.plan.Strong;
 import org.apache.calcite.plan.volcano.RelSubset;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Aggregate;
+import org.apache.calcite.rel.core.Correlate;
 import org.apache.calcite.rel.core.Exchange;
 import org.apache.calcite.rel.core.Filter;
 import org.apache.calcite.rel.core.Intersect;
@@ -149,8 +150,13 @@ public class RelMdPredicates
   /**
    * Infers predicates for a table scan.
    */
-  public RelOptPredicateList getPredicates(TableScan table,
+  public RelOptPredicateList getPredicates(TableScan scan,
       RelMetadataQuery mq) {
+    final BuiltInMetadata.Predicates.Handler handler =
+        scan.getTable().unwrap(BuiltInMetadata.Predicates.Handler.class);
+    if (handler != null) {
+      return handler.getPredicates(scan, mq);
+    }
     return RelOptPredicateList.EMPTY;
   }
 
@@ -268,6 +274,13 @@ public class RelMdPredicates
     }
     // Cannot weaken to anything non-trivial
     return rexBuilder.makeLiteral(true);
+  }
+
+  /**
+   * Infers predicates for a correlate node.
+   */
+  public RelOptPredicateList getPredicates(Correlate correlate, RelMetadataQuery mq) {
+    return mq.getPulledUpPredicates(correlate.getLeft());
   }
 
   /**

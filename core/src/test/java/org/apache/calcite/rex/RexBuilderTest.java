@@ -17,6 +17,7 @@
 package org.apache.calcite.rex;
 
 import org.apache.calcite.avatica.util.ByteString;
+import org.apache.calcite.avatica.util.TimeUnit;
 import org.apache.calcite.rel.core.CorrelationId;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
@@ -27,10 +28,12 @@ import org.apache.calcite.rel.type.RelDataTypeSystem;
 import org.apache.calcite.rel.type.RelDataTypeSystemImpl;
 import org.apache.calcite.sql.SqlCollation;
 import org.apache.calcite.sql.SqlKind;
+import org.apache.calcite.sql.fun.SqlLibraryOperators;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.type.BasicSqlType;
 import org.apache.calcite.sql.type.SqlTypeFactoryImpl;
 import org.apache.calcite.sql.type.SqlTypeName;
+import org.apache.calcite.test.RexImplicationCheckerFixtures;
 import org.apache.calcite.util.DateString;
 import org.apache.calcite.util.Litmus;
 import org.apache.calcite.util.NlsString;
@@ -624,6 +627,44 @@ class RexBuilderTest {
     assertThat(inCall.getKind(), is(SqlKind.SEARCH));
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-4632">[CALCITE-4632]
+   * Find the least restrictive datatype for SARG</a>. */
+  @Test void testLeastRestrictiveTypeForSargMakeIn() {
+    final RelDataTypeFactory typeFactory = new SqlTypeFactoryImpl(RelDataTypeSystem.DEFAULT);
+    final RexBuilder rexBuilder = new RexBuilder(typeFactory);
+    final RelDataType decimalType = typeFactory.createSqlType(SqlTypeName.DECIMAL);
+    RexNode left = rexBuilder.makeInputRef(decimalType, 0);
+    final RexNode literal1 = rexBuilder.makeExactLiteral(new BigDecimal("1.0"));
+    final RexNode literal2 = rexBuilder.makeExactLiteral(new BigDecimal("20000.0"));
+
+    RexNode inCall = rexBuilder.makeIn(left, ImmutableList.of(literal1, literal2));
+    assertThat(inCall.getKind(), is(SqlKind.SEARCH));
+
+    final RexNode sarg = ((RexCall) inCall).operands.get(1);
+    RelDataType expected = typeFactory.createSqlType(SqlTypeName.DECIMAL, 6, 1);
+    assertEquals(sarg.getType(), expected);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-4632">[CALCITE-4632]
+   * Find the least restrictive datatype for SARG</a>. */
+  @Test void testLeastRestrictiveTypeForSargMakeBetween() {
+    final RelDataTypeFactory typeFactory = new SqlTypeFactoryImpl(RelDataTypeSystem.DEFAULT);
+    final RexBuilder rexBuilder = new RexBuilder(typeFactory);
+    final RelDataType decimalType = typeFactory.createSqlType(SqlTypeName.DECIMAL);
+    RexNode left = rexBuilder.makeInputRef(decimalType, 0);
+    final RexNode literal1 = rexBuilder.makeExactLiteral(new BigDecimal("1.0"));
+    final RexNode literal2 = rexBuilder.makeExactLiteral(new BigDecimal("20000.0"));
+
+    RexNode betweenCall = rexBuilder.makeBetween(left, literal1, literal2);
+    assertThat(betweenCall.getKind(), is(SqlKind.SEARCH));
+
+    final RexNode sarg = ((RexCall) betweenCall).operands.get(1);
+    RelDataType expected = typeFactory.createSqlType(SqlTypeName.DECIMAL, 6, 1);
+    assertEquals(sarg.getType(), expected);
+  }
+
   /** Tests {@link RexCopier#visitOver(RexOver)}. */
   @Test void testCopyOver() {
     final RelDataTypeFactory sourceTypeFactory =
@@ -811,5 +852,35 @@ class RexBuilderTest {
     // when the space before "NOT NULL" is missing, the digest is not correct
     // and the suffix should not be removed.
     assertThat(literal.digest, is("0L:(udt)NOT NULL"));
+  }
+
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5489">[CALCITE-5489]
+   * RexCall to TIMESTAMP_DIFF function fails to convert a TIMESTAMP literal to
+   * a org.apache.calcite.avatica.util.TimeUnit</a>. */
+  @Test void testTimestampDiffCall() {
+    final RexImplicationCheckerFixtures.Fixture f =
+        new RexImplicationCheckerFixtures.Fixture();
+    final TimestampString ts =
+        TimestampString.fromCalendarFields(Util.calendar());
+    final RexNode literal = f.timestampLiteral(ts);
+    final RexLiteral flag = f.rexBuilder.makeFlag(TimeUnit.QUARTER);
+    assertThat(
+        f.rexBuilder.makeCall(SqlLibraryOperators.DATEDIFF,
+            flag, literal, literal),
+        notNullValue());
+    assertThat(
+        f.rexBuilder.makeCall(SqlStdOperatorTable.TIMESTAMP_DIFF,
+            flag, literal, literal),
+        notNullValue());
+    assertThat(
+        f.rexBuilder.makeCall(SqlLibraryOperators.TIMESTAMP_DIFF3,
+            literal, literal, flag),
+        notNullValue());
+    assertThat(
+        f.rexBuilder.makeCall(SqlLibraryOperators.TIME_DIFF,
+            literal, literal, flag),
+        notNullValue());
   }
 }
