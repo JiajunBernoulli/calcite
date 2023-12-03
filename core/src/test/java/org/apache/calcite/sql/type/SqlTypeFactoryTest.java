@@ -150,6 +150,34 @@ class SqlTypeFactoryTest {
     assertThat(leastRestrictive.getValueType().getPrecision(), is(10));
   }
 
+  @Test void testLeastRestrictiveForTimestamps() {
+    SqlTypeFixture f = new SqlTypeFixture();
+    RelDataType leastRestrictive =
+        f.typeFactory.leastRestrictive(
+            Lists.newArrayList(f.sqlTimestampPrec0, f.sqlTimestampPrec3));
+    assertThat(leastRestrictive.getSqlTypeName(), is(SqlTypeName.TIMESTAMP));
+    assertThat(leastRestrictive.isNullable(), is(false));
+    assertThat(leastRestrictive.getPrecision(), is(3));
+  }
+
+  @Test void testLeastRestrictiveForTimestamps2() {
+    SqlTypeFixture f = new SqlTypeFixture();
+    RelDataType leastRestrictive =
+        f.typeFactory.leastRestrictive(
+            Lists.newArrayList(f.sqlTimestampPrec3, f.sqlTimestampPrec0));
+    assertThat(leastRestrictive.getSqlTypeName(), is(SqlTypeName.TIMESTAMP));
+    assertThat(leastRestrictive.isNullable(), is(false));
+    assertThat(leastRestrictive.getPrecision(), is(3));
+  }
+
+  @Test void testLeastRestrictiveForTimestampAndDate() {
+    SqlTypeFixture f = new SqlTypeFixture();
+    RelDataType leastRestrictive =
+        f.typeFactory.leastRestrictive(
+            Lists.newArrayList(f.sqlTimestampPrec3, f.sqlDate));
+    assertNull(leastRestrictive);
+  }
+
   @Test void testLeastRestrictiveForImpossibleWithMaps() {
     SqlTypeFixture f = new SqlTypeFixture();
     RelDataType leastRestrictive =
@@ -216,14 +244,17 @@ class SqlTypeFactoryTest {
     SqlTypeFixture f = new SqlTypeFixture();
     RelDataTypeFactory typeFactory = f.typeFactory;
     List<RelDataTypeField> fields = new ArrayList<>();
-    RelDataTypeField field0 = new RelDataTypeFieldImpl(
-            "i", 0, typeFactory.createSqlType(SqlTypeName.INTEGER));
-    RelDataTypeField field1 = new RelDataTypeFieldImpl(
-            "s", 1, typeFactory.createSqlType(SqlTypeName.VARCHAR));
+    RelDataTypeField field0 =
+        new RelDataTypeFieldImpl("i", 0,
+            typeFactory.createSqlType(SqlTypeName.INTEGER));
+    RelDataTypeField field1 =
+        new RelDataTypeFieldImpl("s", 1,
+            typeFactory.createSqlType(SqlTypeName.VARCHAR));
     fields.add(field0);
     fields.add(field1);
     final RelDataType recordType = new RelRecordType(fields); // nullable false by default
-    final RelDataType copyRecordType = typeFactory.createTypeWithNullability(recordType, true);
+    final RelDataType copyRecordType =
+        typeFactory.createTypeWithNullability(recordType, true);
     assertFalse(recordType.isNullable());
     assertTrue(copyRecordType.isNullable());
   }

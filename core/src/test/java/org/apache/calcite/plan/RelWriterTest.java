@@ -54,6 +54,7 @@ import org.apache.calcite.schema.SchemaPlus;
 import org.apache.calcite.sql.SqlExplainFormat;
 import org.apache.calcite.sql.SqlExplainLevel;
 import org.apache.calcite.sql.SqlIntervalQualifier;
+import org.apache.calcite.sql.fun.SqlLibraryOperators;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.fun.SqlTrimFunction;
 import org.apache.calcite.sql.parser.SqlParserPos;
@@ -68,6 +69,7 @@ import org.apache.calcite.util.Holder;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.JsonBuilder;
 import org.apache.calcite.util.TestUtil;
+import org.apache.calcite.util.TimestampString;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -461,7 +463,7 @@ class RelWriterTest {
           .nullableRecord(false)
           .build();
       final JsonBuilder jsonBuilder = new JsonBuilder();
-      final RelJson json = new RelJson(jsonBuilder);
+      final RelJson json = RelJson.create().withJsonBuilder(jsonBuilder);
       final Object o = json.toJson(type);
       assertThat(o, notNullValue());
       final String s = jsonBuilder.toJsonString(o);
@@ -592,7 +594,8 @@ class RelWriterTest {
                           RexWindowBounds.following(
                               rexBuilder.makeExactLiteral(BigDecimal.ONE)),
                           false, true, false, false, false)),
-                  ImmutableList.of("field0", "field1", "field2"));
+                  ImmutableList.of("field0", "field1", "field2"),
+                  ImmutableSet.of());
           final RelJsonWriter writer = new RelJsonWriter();
           project.explain(writer);
           return writer.asString();
@@ -766,7 +769,7 @@ class RelWriterTest {
     final ObjectMapper mapper = new ObjectMapper();
     final TypeReference<LinkedHashMap<String, Object>> typeRef =
         new TypeReference<LinkedHashMap<String, Object>>() {
-    };
+        };
     final Map<String, Object> o;
     try {
       o = mapper
@@ -775,8 +778,9 @@ class RelWriterTest {
     } catch (JsonProcessingException e) {
       throw TestUtil.rethrow(e);
     }
-    RexNode e =
-        RelJson.readExpression(cluster, RelWriterTest::translateInput, o);
+    final RelJson relJson = RelJson.create()
+        .withInputTranslator(RelWriterTest::translateInput);
+    final RexNode e = relJson.toRex(cluster, o);
     assertThat(e.toString(), is(matcher));
   }
 
@@ -866,6 +870,30 @@ class RelWriterTest {
     assertThat(s, isLinux(expected));
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-4804">[CALCITE-4804]
+   * Support Snapshot operator serialization and deserizalization</a>. */
+  @Test void testSnapshot() {
+    // Equivalent SQL:
+    //   SELECT *
+    //   FROM products_temporal FOR SYSTEM_TIME AS OF TIMESTAMP '2011-07-20 12:34:56'
+    final RelBuilder builder = RelBuilder.create(RelBuilderTest.config().build());
+    RelNode root =
+        builder.scan("products_temporal")
+            .snapshot(
+                builder.getRexBuilder().makeTimestampLiteral(
+                    new TimestampString("2011-07-20 12:34:56"), 0))
+            .build();
+
+    RelJsonWriter jsonWriter = new RelJsonWriter();
+    root.explain(jsonWriter);
+    String relJson = jsonWriter.asString();
+    String s = deserializeAndDumpToTextFormat(getSchema(root), relJson);
+    String expected = "LogicalSnapshot(period=[2011-07-20 12:34:56])\n"
+        + "  LogicalTableScan(table=[[scott, products_temporal]])\n";
+    assertThat(s, isLinux(expected));
+  }
+
   @Test void testDeserializeInvalidOperatorName() {
     final FrameworkConfig config = RelBuilderTest.config().build();
     final RelBuilder builder = RelBuilder.create(config);
@@ -890,6 +918,31 @@ class RelWriterTest {
         () -> deserializeAndDumpToTextFormat(getSchema(rel), relJson),
         "org.apache.calcite.runtime.CalciteException: "
             + "No operator for 'MAXS' with kind: 'MAX', syntax: 'FUNCTION' during JSON deserialization");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5349">[CALCITE-5349]
+   * RelJson deserialization should support SqlLibraryOperators</a>. Before the
+   * fix, non-standard operators such as BigQuery's
+   * {@link SqlLibraryOperators#CURRENT_DATETIME} would throw during
+   * deserialization. */
+  @Test void testDeserializeNonStandardOperator() {
+    final FrameworkConfig config = RelBuilderTest.config().build();
+    final RelBuilder builder = RelBuilder.create(config);
+    final RelNode rel = builder
+        .scan("EMP")
+        .project(builder.field("JOB"),
+            builder.call(SqlLibraryOperators.CURRENT_DATETIME))
+        .build();
+    final RelJsonWriter jsonWriter =
+        new RelJsonWriter(new JsonBuilder(), RelJson::withLibraryOperatorTable);
+    rel.explain(jsonWriter);
+    String relJson = jsonWriter.asString();
+    String result = deserializeAndDumpToTextFormat(getSchema(rel), relJson);
+    final String expected = ""
+        + "LogicalProject(JOB=[$2], $f1=[CURRENT_DATETIME()])\n"
+        + "  LogicalTableScan(table=[[scott, EMP]])\n";
+    assertThat(result, isLinux(expected));
   }
 
   @Test void testAggregateWithoutAlias() {
@@ -993,6 +1046,21 @@ class RelWriterTest {
     final String expected = ""
         + "LogicalProject($f0=[COUNT() OVER (ORDER BY $7 NULLS LAST "
         + "ROWS UNBOUNDED PRECEDING)])\n"
+        + "  LogicalTableScan(table=[[scott, EMP]])\n";
+    relFn(relFn)
+        .assertThatPlan(isLinux(expected));
+  }
+
+  @Test void testProjectionWithCorrelationVariables() {
+    final Function<RelBuilder, RelNode> relFn = b -> b.scan("EMP")
+        .project(
+            ImmutableList.of(b.field("ENAME")),
+            ImmutableList.of("ename"),
+            true,
+            ImmutableSet.of(b.getCluster().createCorrel()))
+        .build();
+
+    final String expected = "LogicalProject(variablesSet=[[$cor0]], ename=[$1])\n"
         + "  LogicalTableScan(table=[[scott, EMP]])\n";
     relFn(relFn)
         .assertThatPlan(isLinux(expected));
@@ -1126,7 +1194,8 @@ class RelWriterTest {
       SqlExplainFormat format) {
     return Frameworks.withPlanner((cluster, relOptSchema, rootSchema) -> {
       final RelJsonReader reader =
-          new RelJsonReader(cluster, schema, rootSchema);
+          new RelJsonReader(cluster, schema, rootSchema,
+              RelJson::withLibraryOperatorTable);
       RelNode node;
       try {
         node = reader.read(relJson);
@@ -1420,8 +1489,9 @@ class RelWriterTest {
       final FrameworkConfig config = RelBuilderTest.config().build();
       final RelBuilder b = RelBuilder.create(config);
       RelNode rel = relFn.apply(b);
-      final String relJson = RelOptUtil.dumpPlan("", rel,
-          SqlExplainFormat.JSON, SqlExplainLevel.EXPPLAN_ATTRIBUTES);
+      final String relJson =
+          RelOptUtil.dumpPlan("", rel, SqlExplainFormat.JSON,
+              SqlExplainLevel.EXPPLAN_ATTRIBUTES);
       assertThat(relJson, matcher);
       return this;
     }
@@ -1430,8 +1500,9 @@ class RelWriterTest {
       final FrameworkConfig config = RelBuilderTest.config().build();
       final RelBuilder b = RelBuilder.create(config);
       RelNode rel = relFn.apply(b);
-      final String relJson = RelOptUtil.dumpPlan("", rel,
-          SqlExplainFormat.JSON, SqlExplainLevel.EXPPLAN_ATTRIBUTES);
+      final String relJson =
+          RelOptUtil.dumpPlan("", rel, SqlExplainFormat.JSON,
+              SqlExplainLevel.EXPPLAN_ATTRIBUTES);
       final String plan;
       if (distribution) {
         VolcanoPlanner planner = new VolcanoPlanner();

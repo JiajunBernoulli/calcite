@@ -47,12 +47,11 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.primitives.Ints;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;
 import org.hamcrest.StringDescription;
 import org.hamcrest.TypeSafeMatcher;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import java.io.PrintWriter;
@@ -986,7 +985,7 @@ class UtilTest {
 
     final List<Pair<String, Integer>> pairs =
         Pair.zip(strings, integers, false);
-    final Map<String, Integer> map = ImmutableMap.copyOf(pairs);
+    final Map<String, Integer> map = Compatible.copyOf(pairs);
 
     // shorter list on the right
     final AtomicInteger size = new AtomicInteger();
@@ -1206,8 +1205,7 @@ class UtilTest {
     assertThat(list2.appendAll(list2), is(Arrays.asList(1, 3, 5, 1, 3, 5)));
     assertThat(
         Arrays.toString(ImmutableIntList.of(1).toArray(new Integer[]{5, 6, 7})),
-        is("[1, null, 7]")
-    );
+        is("[1, null, 7]"));
   }
 
   /** Unit test for {@link IdPair}. */
@@ -1641,12 +1639,10 @@ class UtilTest {
     CompositeMap<String, Integer> map = CompositeMap.of(beatleMap);
     checkCompositeMap(beatles, map);
 
-    map = CompositeMap.of(
-        beatleMap, Collections.emptyMap());
+    map = CompositeMap.of(beatleMap, Collections.emptyMap());
     checkCompositeMap(beatles, map);
 
-    map = CompositeMap.of(
-        Collections.emptyMap(), beatleMap);
+    map = CompositeMap.of(Collections.emptyMap(), beatleMap);
     checkCompositeMap(beatles, map);
 
     map = CompositeMap.of(beatleMap, beatleMap);
@@ -2057,10 +2053,10 @@ class UtilTest {
   /** Tests {@link ReflectUtil#mightBeAssignableFrom(Class, Class)}. */
   @Test void testMightBeAssignableFrom() {
     final Object myMap = new HashMap<String, Integer>() {
-      @Override public @NotNull Set<Entry<String, Integer>> entrySet() {
+      @Override public Set<Entry<String, Integer>> entrySet() {
         throw new UnsupportedOperationException();
       }
-      @Override public @Nullable Integer put(String key, Integer value) {
+      @Override public Integer put(String key, Integer value) {
         throw new UnsupportedOperationException();
       }
       @Override public int size() {
@@ -2345,7 +2341,8 @@ class UtilTest {
     memo1.close();
     assertThat(local1.get(), is("foo"));
 
-    final TryThreadLocal<String> local2 = TryThreadLocal.of(null);
+    final TryThreadLocal<@Nullable String> local2 =
+        TryThreadLocal.of(null);
     assertThat(local2.get(), nullValue());
     TryThreadLocal.Memo memo2 = local2.push("a");
     assertThat(local2.get(), is("a"));
@@ -2738,6 +2735,49 @@ class UtilTest {
     assertThat(map.containsKey("zyMurgy", false), is(true));
   }
 
+  /** Test {@link MonotonicSupplier}. */
+  @Test void testMonotonicSupplier() {
+    final MonotonicSupplier<String> monotonicSupplier =
+        new MonotonicSupplier<>();
+
+    // Cannot 'get' before 'accept'
+    try {
+      final String s = monotonicSupplier.get();
+      fail("expected error, got " + s);
+    } catch (IllegalArgumentException e) {
+      assertThat(e.getMessage(), is("accept has not been called"));
+    }
+
+    // Does not accept null
+    try {
+      //noinspection ConstantConditions
+      monotonicSupplier.accept(null);
+      fail("expected error");
+    } catch (NullPointerException e) {
+      assertThat(e.getMessage(), is("element must not be null"));
+    }
+
+    monotonicSupplier.accept("hello");
+
+    // After 'accept' we can call 'get' multiple times
+    final String s = monotonicSupplier.get();
+    assertThat(s, is("hello"));
+
+    final String s2 = monotonicSupplier.get();
+    assertThat(s2, is("hello"));
+
+    // Does not 'accept' twice
+    try {
+      monotonicSupplier.accept("goodbye");
+      fail("expected error");
+    } catch (IllegalArgumentException e) {
+      assertThat(e.getMessage(), is("accept has been called already"));
+    }
+
+    final String s3 = monotonicSupplier.get();
+    assertThat(s3, is("hello"));
+  }
+
   @Test void testNlsStringClone() {
     final NlsString s = new NlsString("foo", "LATIN1", SqlCollation.IMPLICIT);
     assertThat(s.toString(), is("_LATIN1'foo'"));
@@ -2976,6 +3016,7 @@ class UtilTest {
       }
     }
   }
+
   private static <E> Matcher<Iterable<E>> isIterable(final Iterable<E> iterable) {
     final List<E> list = toList(iterable);
     return new TypeSafeMatcher<Iterable<E>>() {
