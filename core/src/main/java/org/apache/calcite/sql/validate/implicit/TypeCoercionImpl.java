@@ -104,14 +104,17 @@ public class TypeCoercionImpl extends AbstractTypeCoercion {
       updateInferredColumnType(scope1, query, columnIndex, targetType);
       return true;
     case VALUES:
+      boolean coerceValues = false;
       for (SqlNode rowConstructor : ((SqlCall) query).getOperandList()) {
-        if (!coerceOperandType(scope, (SqlCall) rowConstructor, columnIndex, targetType)) {
-          return false;
+        if (coerceOperandType(scope, (SqlCall) rowConstructor, columnIndex, targetType)) {
+          coerceValues = true;
         }
       }
-      updateInferredColumnType(
-          requireNonNull(scope, "scope"), query, columnIndex, targetType);
-      return true;
+      if (coerceValues) {
+        updateInferredColumnType(
+            requireNonNull(scope, "scope"), query, columnIndex, targetType);
+      }
+      return coerceValues;
     case WITH:
       SqlNode body = ((SqlWith) query).body;
       return rowTypeCoercion(validator.getOverScope(query), body, columnIndex, targetType);
@@ -121,8 +124,13 @@ public class TypeCoercionImpl extends AbstractTypeCoercion {
       // Set operations are binary for now.
       final SqlCall operand0 = ((SqlCall) query).operand(0);
       final SqlCall operand1 = ((SqlCall) query).operand(1);
-      final boolean coerced = rowTypeCoercion(scope, operand0, columnIndex, targetType)
-          && rowTypeCoercion(scope, operand1, columnIndex, targetType);
+      // Operand1 should be coerced even if operand0 not need to be coerced.
+      // For example, we have one table named t:
+      // INSERT INTO t -- only one column is c(int).
+      // SELECT 1 UNION   -- operand0 not need to be coerced.
+      // SELECT 1.0  -- operand1 should be coerced.
+      boolean coerced = rowTypeCoercion(scope, operand0, columnIndex, targetType);
+      coerced = rowTypeCoercion(scope, operand1, columnIndex, targetType) || coerced;
       // Update the nested SET operator node type.
       if (coerced) {
         updateInferredColumnType(

@@ -42,8 +42,11 @@ import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeImpl;
 import org.apache.calcite.rel.type.RelProtoDataType;
 import org.apache.calcite.runtime.CalciteException;
-import org.apache.calcite.runtime.GeoFunctions;
 import org.apache.calcite.runtime.Hook;
+import org.apache.calcite.runtime.SpatialTypeFunctions;
+import org.apache.calcite.runtime.SpatialTypeFunctions.Accum;
+import org.apache.calcite.runtime.SpatialTypeFunctions.Collect;
+import org.apache.calcite.runtime.SpatialTypeFunctions.Union;
 import org.apache.calcite.schema.Schema;
 import org.apache.calcite.schema.SchemaPlus;
 import org.apache.calcite.schema.SchemaVersion;
@@ -53,6 +56,7 @@ import org.apache.calcite.schema.TableFunction;
 import org.apache.calcite.schema.Wrapper;
 import org.apache.calcite.schema.impl.AbstractSchema;
 import org.apache.calcite.schema.impl.AbstractTable;
+import org.apache.calcite.schema.impl.AggregateFunctionImpl;
 import org.apache.calcite.schema.impl.TableFunctionImpl;
 import org.apache.calcite.schema.impl.ViewTable;
 import org.apache.calcite.schema.impl.ViewTableMacro;
@@ -60,7 +64,7 @@ import org.apache.calcite.sql.SqlCall;
 import org.apache.calcite.sql.SqlDialect;
 import org.apache.calcite.sql.SqlExplainLevel;
 import org.apache.calcite.sql.SqlNode;
-import org.apache.calcite.sql.fun.SqlGeoFunctions;
+import org.apache.calcite.sql.fun.SqlSpatialTypeFunctions;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql.validate.SqlConformanceEnum;
 import org.apache.calcite.sql.validate.SqlValidatorException;
@@ -723,7 +727,7 @@ public class CalciteAssert {
     loop:
       for (Method method1 : aClass.getMethods()) {
         if (method1.getName().equals(methodName)
-            && method1.getParameterTypes().length == args.length
+            && method1.getParameterCount() == args.length
             && Modifier.isPublic(method1.getDeclaringClass().getModifiers())) {
           for (Pair<Object, Class> pair
               : Pair.zip(args, (Class[]) method1.getParameterTypes())) {
@@ -820,9 +824,14 @@ public class CalciteAssert {
       return rootSchema.add("foodmart2", new CloneSchema(foodmart));
     case GEO:
       ModelHandler.addFunctions(rootSchema, null, emptyPath,
-          GeoFunctions.class.getName(), "*", true);
+          SpatialTypeFunctions.class.getName(), "*", true);
       ModelHandler.addFunctions(rootSchema, null, emptyPath,
-          SqlGeoFunctions.class.getName(), "*", true);
+          SqlSpatialTypeFunctions.class.getName(), "*", true);
+      rootSchema.add("ST_UNION", AggregateFunctionImpl.create(Union.class));
+      rootSchema.add("ST_ACCUM", AggregateFunctionImpl.create(Accum.class));
+      rootSchema.add("ST_COLLECT", AggregateFunctionImpl.create(Collect.class));
+      ModelHandler.addFunctions(rootSchema, "roundGeom", emptyPath,
+          TestUtil.class.getName(), "roundGeom", true);
       final SchemaPlus s =
           rootSchema.add(schema.schemaName, new AbstractSchema());
       ModelHandler.addFunctions(s, "countries", emptyPath,
@@ -831,7 +840,6 @@ public class CalciteAssert {
       final ViewTableMacro viewMacro = ViewTable.viewMacro(rootSchema, sql,
           ImmutableList.of("GEO"), emptyPath, false);
       s.add("countries", viewMacro);
-
       ModelHandler.addFunctions(s, "states", emptyPath,
           StatesTableFunction.class.getName(), "states", false);
       final String sql2 = "select \"name\",\n"

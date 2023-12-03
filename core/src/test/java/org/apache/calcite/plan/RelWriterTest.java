@@ -68,6 +68,7 @@ import org.apache.calcite.util.Holder;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.JsonBuilder;
 import org.apache.calcite.util.TestUtil;
+import org.apache.calcite.util.TimestampString;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -592,7 +593,8 @@ class RelWriterTest {
                           RexWindowBounds.following(
                               rexBuilder.makeExactLiteral(BigDecimal.ONE)),
                           false, true, false, false, false)),
-                  ImmutableList.of("field0", "field1", "field2"));
+                  ImmutableList.of("field0", "field1", "field2"),
+                  ImmutableSet.of());
           final RelJsonWriter writer = new RelJsonWriter();
           project.explain(writer);
           return writer.asString();
@@ -866,6 +868,30 @@ class RelWriterTest {
     assertThat(s, isLinux(expected));
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-4804">[CALCITE-4804]
+   * Support Snapshot operator serialization and deserizalization</a>. */
+  @Test void testSnapshot() {
+    // Equivalent SQL:
+    //   SELECT *
+    //   FROM products_temporal FOR SYSTEM_TIME AS OF TIMESTAMP '2011-07-20 12:34:56'
+    final RelBuilder builder = RelBuilder.create(RelBuilderTest.config().build());
+    RelNode root =
+        builder.scan("products_temporal")
+            .snapshot(
+                builder.getRexBuilder().makeTimestampLiteral(
+                    new TimestampString("2011-07-20 12:34:56"), 0))
+            .build();
+
+    RelJsonWriter jsonWriter = new RelJsonWriter();
+    root.explain(jsonWriter);
+    String relJson = jsonWriter.asString();
+    String s = deserializeAndDumpToTextFormat(getSchema(root), relJson);
+    String expected = "LogicalSnapshot(period=[2011-07-20 12:34:56])\n"
+        + "  LogicalTableScan(table=[[scott, products_temporal]])\n";
+    assertThat(s, isLinux(expected));
+  }
+
   @Test void testDeserializeInvalidOperatorName() {
     final FrameworkConfig config = RelBuilderTest.config().build();
     final RelBuilder builder = RelBuilder.create(config);
@@ -993,6 +1019,21 @@ class RelWriterTest {
     final String expected = ""
         + "LogicalProject($f0=[COUNT() OVER (ORDER BY $7 NULLS LAST "
         + "ROWS UNBOUNDED PRECEDING)])\n"
+        + "  LogicalTableScan(table=[[scott, EMP]])\n";
+    relFn(relFn)
+        .assertThatPlan(isLinux(expected));
+  }
+
+  @Test void testProjectionWithCorrelationVariables() {
+    final Function<RelBuilder, RelNode> relFn = b -> b.scan("EMP")
+        .project(
+            ImmutableList.of(b.field("ENAME")),
+            ImmutableList.of("ename"),
+            true,
+            ImmutableSet.of(b.getCluster().createCorrel()))
+        .build();
+
+    final String expected = "LogicalProject(variablesSet=[[$cor0]], ename=[$1])\n"
         + "  LogicalTableScan(table=[[scott, EMP]])\n";
     relFn(relFn)
         .assertThatPlan(isLinux(expected));
