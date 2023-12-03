@@ -29,6 +29,7 @@ import org.apache.calcite.sql.parser.StringAndPos;
 import org.apache.calcite.sql.test.SqlTester.ResultChecker;
 import org.apache.calcite.sql.test.SqlTester.TypeChecker;
 import org.apache.calcite.sql.validate.SqlConformance;
+import org.apache.calcite.sql.validate.SqlConformanceEnum;
 import org.apache.calcite.sql.validate.SqlValidator;
 import org.apache.calcite.test.CalciteAssert;
 import org.apache.calcite.test.ConnectionFactories;
@@ -38,6 +39,7 @@ import org.apache.calcite.util.Bug;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
 
+import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
 import static org.apache.calcite.rel.type.RelDataTypeImpl.NON_NULLABLE_SUFFIX;
@@ -66,35 +68,24 @@ import static org.apache.calcite.sql.test.ResultCheckers.isSingle;
 public interface SqlOperatorFixture extends AutoCloseable {
   //~ Enums ------------------------------------------------------------------
 
-  // TODO: Change message when Fnl3Fixed to something like
-  // "Invalid character for cast: PC=0 Code=22018"
-  String INVALID_CHAR_MESSAGE =
-      Bug.FNL3_FIXED ? null : "(?s).*";
+  // TODO: Change message
+  String INVALID_CHAR_MESSAGE = "(?s).*";
 
-  // TODO: Change message when Fnl3Fixed to something like
-  // "Overflow during calculation or cast: PC=0 Code=22003"
-  String OUT_OF_RANGE_MESSAGE =
-      Bug.FNL3_FIXED ? null : "(?s).*";
+  String OUT_OF_RANGE_MESSAGE = ".* out of range";
 
-  // TODO: Change message when Fnl3Fixed to something like
-  // "Division by zero: PC=0 Code=22012"
-  String DIVISION_BY_ZERO_MESSAGE =
-      Bug.FNL3_FIXED ? null : "(?s).*";
+  // TODO: Change message
+  String DIVISION_BY_ZERO_MESSAGE = "(?s).*";
 
-  // TODO: Change message when Fnl3Fixed to something like
-  // "String right truncation: PC=0 Code=22001"
-  String STRING_TRUNC_MESSAGE =
-      Bug.FNL3_FIXED ? null : "(?s).*";
+  // TODO: Change message
+  String STRING_TRUNC_MESSAGE = "(?s).*";
 
-  // TODO: Change message when Fnl3Fixed to something like
-  // "Invalid datetime format: PC=0 Code=22007"
-  String BAD_DATETIME_MESSAGE =
-      Bug.FNL3_FIXED ? null : "(?s).*";
+  // TODO: Change message
+  String BAD_DATETIME_MESSAGE = "(?s).*";
 
   // Error messages when an invalid time unit is given as
   // input to extract for a particular input type.
   String INVALID_EXTRACT_UNIT_CONVERTLET_ERROR =
-      "Extract.*from.*type data is not supported";
+      "Was not expecting value '.*' for enumeration.*";
 
   String INVALID_EXTRACT_UNIT_VALIDATION_ERROR =
       "Cannot apply 'EXTRACT' to arguments of type .*'\n.*";
@@ -501,6 +492,7 @@ public interface SqlOperatorFixture extends AutoCloseable {
 
   /**
    * Tests that an aggregate expression fails at run time.
+   *
    * @param expr An aggregate expression
    * @param inputValues Array of input values
    * @param expectedError Pattern for expected error
@@ -561,6 +553,30 @@ public interface SqlOperatorFixture extends AutoCloseable {
                 .with(CalciteConnectionProperty.FUN, library.fun));
   }
 
+  /** Applies this fixture to some code for each of the given libraries. */
+  default void forEachLibrary(Iterable<? extends SqlLibrary> libraries,
+      Consumer<SqlOperatorFixture> consumer) {
+    SqlLibrary.expand(libraries).forEach(library -> {
+      try {
+        consumer.accept(this.withLibrary(library));
+      } catch (Exception e) {
+        throw new RuntimeException("for library " + library, e);
+      }
+    });
+  }
+
+  /** Applies this fixture to some code for each of the given conformances. */
+  default void forEachConformance(Iterable<? extends SqlConformanceEnum> conformances,
+      Consumer<SqlOperatorFixture> consumer) {
+    conformances.forEach(conformance -> {
+      try {
+        consumer.accept(this.withConformance(conformance));
+      } catch (Exception e) {
+        throw new RuntimeException("for conformance " + conformance, e);
+      }
+    });
+  }
+
   default SqlOperatorFixture forOracle(SqlConformance conformance) {
     return withConformance(conformance)
         .withOperatorTable(
@@ -571,74 +587,96 @@ public interface SqlOperatorFixture extends AutoCloseable {
                 .with("fun", "oracle"));
   }
 
+  /**
+   * Types for cast.
+   */
+  enum CastType {
+    CAST("cast"),
+    SAFE_CAST("safe_cast"),
+    TRY_CAST("try_cast");
+
+    CastType(String name) {
+      this.name = name;
+    }
+
+    final String name;
+  }
+
   default String getCastString(
       String value,
       String targetType,
-      boolean errorLoc) {
+      boolean errorLoc,
+      CastType castType) {
     if (errorLoc) {
       value = "^" + value + "^";
     }
-    return "cast(" + value + " as " + targetType + ")";
+    String function = castType.name;
+    return function + "(" + value + " as " + targetType + ")";
   }
 
   default void checkCastToApproxOkay(String value, String targetType,
-      Object expected) {
-    checkScalarApprox(getCastString(value, targetType, false),
-        targetType + NON_NULLABLE_SUFFIX, expected);
+      Object expected, CastType castType) {
+    checkScalarApprox(getCastString(value, targetType, false, castType),
+        getTargetType(targetType, castType), expected);
   }
 
   default void checkCastToStringOkay(String value, String targetType,
-      String expected) {
-    checkString(getCastString(value, targetType, false), expected,
-        targetType + NON_NULLABLE_SUFFIX);
+      String expected, CastType castType) {
+    final String castString = getCastString(value, targetType, false, castType);
+    checkString(castString, expected, getTargetType(targetType, castType));
   }
 
   default void checkCastToScalarOkay(String value, String targetType,
-      String expected) {
-    checkScalarExact(getCastString(value, targetType, false),
-        targetType + NON_NULLABLE_SUFFIX,
-        expected);
+      String expected, CastType castType) {
+    final String castString = getCastString(value, targetType, false, castType);
+    checkScalarExact(castString, getTargetType(targetType, castType), expected);
   }
 
-  default void checkCastToScalarOkay(String value, String targetType) {
-    checkCastToScalarOkay(value, targetType, value);
+  default String getTargetType(String targetType, CastType castType) {
+    return castType == CastType.CAST ? targetType + NON_NULLABLE_SUFFIX : targetType;
+  }
+
+  default void checkCastToScalarOkay(String value, String targetType,
+      CastType castType) {
+    checkCastToScalarOkay(value, targetType, value, castType);
   }
 
   default void checkCastFails(String value, String targetType,
-      String expectedError, boolean runtime) {
-    checkFails(getCastString(value, targetType, !runtime), expectedError,
-        runtime);
+      String expectedError, boolean runtime, CastType castType) {
+    final String castString = getCastString(value, targetType, !runtime, castType);
+    checkFails(castString, expectedError, runtime);
   }
 
-  default void checkCastToString(String value, String type,
-      @Nullable String expected) {
+  default void checkCastToString(String value, @Nullable String type,
+      @Nullable String expected, CastType castType) {
     String spaces = "     ";
     if (expected == null) {
       expected = value.trim();
     }
     int len = expected.length();
     if (type != null) {
-      value = getCastString(value, type, false);
+      value = getCastString(value, type, false, castType);
     }
 
     // currently no exception thrown for truncation
     if (Bug.DT239_FIXED) {
       checkCastFails(value,
           "VARCHAR(" + (len - 1) + ")", STRING_TRUNC_MESSAGE,
-          true);
+          true, castType);
     }
 
-    checkCastToStringOkay(value, "VARCHAR(" + len + ")", expected);
-    checkCastToStringOkay(value, "VARCHAR(" + (len + 5) + ")", expected);
+    checkCastToStringOkay(value, "VARCHAR(" + len + ")", expected, castType);
+    checkCastToStringOkay(value, "VARCHAR(" + (len + 5) + ")", expected, castType);
 
     // currently no exception thrown for truncation
     if (Bug.DT239_FIXED) {
       checkCastFails(value,
           "CHAR(" + (len - 1) + ")", STRING_TRUNC_MESSAGE,
-          true);
+          true, castType);
     }
 
-    checkCastToStringOkay(value, "CHAR(" + len + ")", expected);
-    checkCastToStringOkay(value, "CHAR(" + (len + 5) + ")", expected + spaces);
+    checkCastToStringOkay(value, "CHAR(" + len + ")", expected, castType);
+    checkCastToStringOkay(value, "CHAR(" + (len + 5) + ")",
+        expected + spaces, castType);
   }
 }

@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 package org.apache.calcite.sql.test;
-
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelRoot;
@@ -23,6 +22,7 @@ import org.apache.calcite.rel.core.RelFactories;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rex.RexNode;
+import org.apache.calcite.runtime.PairList;
 import org.apache.calcite.runtime.Utilities;
 import org.apache.calcite.sql.SqlCall;
 import org.apache.calcite.sql.SqlLiteral;
@@ -60,8 +60,9 @@ import java.util.function.Consumer;
 
 import static org.apache.calcite.test.Matchers.relIsValid;
 
+import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.core.Is.is;
+import static org.hamcrest.Matchers.hasSize;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
@@ -119,7 +120,7 @@ public abstract class AbstractSqlTester implements SqlTester, AutoCloseable {
       if (expectedMsgPattern == null) {
         throw new RuntimeException("Error while parsing query:" + sap, spe);
       } else if (errMessage == null
-          || !errMessage.matches(expectedMsgPattern)) {
+          || !Util.toLinux(errMessage).matches(expectedMsgPattern)) {
         throw new RuntimeException("Error did not match expected ["
             + expectedMsgPattern + "] while parsing query ["
             + sap + "]", spe);
@@ -136,7 +137,7 @@ public abstract class AbstractSqlTester implements SqlTester, AutoCloseable {
           final RelDataType rowType =
               validator.getValidatedNodeType(n);
           final List<RelDataTypeField> fields = rowType.getFieldList();
-          assertThat("expected query to return 1 field", fields.size(), is(1));
+          assertThat("expected query to return 1 field", fields, hasSize(1));
           return fields.get(0).getType();
         });
   }
@@ -234,7 +235,7 @@ public abstract class AbstractSqlTester implements SqlTester, AutoCloseable {
     RelDataType actualType = getColumnType(factory, query);
 
     // Check result type.
-    typeChecker.checkType(actualType);
+    typeChecker.checkType(() -> "Query: " + query, actualType);
 
     Pair<SqlValidator, SqlNode> p = parseAndValidate(factory, query);
     SqlValidator validator = requireNonNull(p.left);
@@ -307,27 +308,28 @@ public abstract class AbstractSqlTester implements SqlTester, AutoCloseable {
    * Builds a query that extracts all literals as columns in an underlying
    * select.
    *
-   * <p>For example,</p>
+   * <p>For example,
    *
    * <blockquote>{@code 1 < 5}</blockquote>
    *
-   * <p>becomes</p>
+   * <p>becomes
    *
    * <blockquote>{@code SELECT p0 < p1
    * FROM (VALUES (1, 5)) AS t(p0, p1)}</blockquote>
    *
    * <p>Null literals don't have enough type information to be extracted.
    * We push down {@code CAST(NULL AS type)} but raw nulls such as
-   * {@code CASE 1 WHEN 2 THEN 'a' ELSE NULL END} are left as is.</p>
+   * {@code CASE 1 WHEN 2 THEN 'a' ELSE NULL END} are left as is.
    *
    * @param factory Test factory
    * @param expression Scalar expression
    * @return Query that evaluates a scalar expression
    */
   protected String buildQuery2(SqlTestFactory factory, String expression) {
-    if (expression.matches("(?i).*percentile_(cont|disc).*")) {
+    if (expression.matches("(?i).*(percentile_(cont|disc)|convert|sort_array)\\(.*")) {
       // PERCENTILE_CONT requires its argument to be a literal,
       // so converting its argument to a column will cause false errors.
+      // Similarly, MSSQL-style CONVERT.
       return buildQuery(expression);
     }
     // "values (1 < 5)"
@@ -362,15 +364,18 @@ public abstract class AbstractSqlTester implements SqlTester, AutoCloseable {
           @Override public SqlNode visit(SqlCall call) {
             SqlOperator operator = call.getOperator();
             if (operator instanceof SqlUnresolvedFunction) {
-              final SqlUnresolvedFunction unresolvedFunction = (SqlUnresolvedFunction) operator;
-              final SqlOperator lookup = SqlValidatorUtil.lookupSqlFunctionByID(
-                  SqlStdOperatorTable.instance(),
-                  unresolvedFunction.getSqlIdentifier(),
-                  unresolvedFunction.getFunctionType());
+              final SqlUnresolvedFunction unresolvedFunction =
+                  (SqlUnresolvedFunction) operator;
+              final SqlOperator lookup =
+                  SqlValidatorUtil.lookupSqlFunctionByID(
+                      SqlStdOperatorTable.instance(),
+                      unresolvedFunction.getSqlIdentifier(),
+                      unresolvedFunction.getFunctionType());
               if (lookup != null) {
                 operator = lookup;
-                call = operator.createCall(call.getFunctionQuantifier(),
-                    call.getParserPosition(), call.getOperandList());
+                call =
+                    operator.createCall(call.getFunctionQuantifier(),
+                        call.getParserPosition(), call.getOperandList());
               }
             }
             if (operator == SqlStdOperatorTable.CAST
@@ -403,7 +408,7 @@ public abstract class AbstractSqlTester implements SqlTester, AutoCloseable {
       return -Utilities.compare(pos0.getColumnNum(), pos1.getColumnNum());
     });
     String sql2 = sql;
-    final List<Pair<String, String>> values = new ArrayList<>();
+    final PairList<String, String> values = PairList.of();
     int p = 0;
     for (SqlNode literal : nodes) {
       final SqlParserPos pos = literal.getParserPosition();
@@ -416,20 +421,20 @@ public abstract class AbstractSqlTester implements SqlTester, AutoCloseable {
               pos.getEndLineNum(),
               pos.getEndColumnNum()) + 1;
       String param = "p" + p++;
-      values.add(Pair.of(sql2.substring(start, end), param));
+      values.add(sql2.substring(start, end), param);
       sql2 = sql2.substring(0, start)
           + param
           + sql2.substring(end);
     }
     if (values.isEmpty()) {
-      values.add(Pair.of("1", "p0"));
+      values.add("1", "p0");
     }
     return "select "
         + sql2.substring("values (".length(), sql2.length() - 1)
         + " from (values ("
-        + Util.commaList(Pair.left(values))
+        + Util.commaList(values.leftList())
         + ")) as t("
-        + Util.commaList(Pair.right(values))
+        + Util.commaList(values.rightList())
         + ")";
   }
 

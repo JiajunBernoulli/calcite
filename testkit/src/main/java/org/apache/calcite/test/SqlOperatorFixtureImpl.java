@@ -39,8 +39,8 @@ import java.util.function.UnaryOperator;
 import static org.apache.calcite.sql.test.ResultCheckers.isNullValue;
 import static org.apache.calcite.sql.test.ResultCheckers.isSingle;
 
+import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.core.Is.is;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
@@ -76,7 +76,7 @@ class SqlOperatorFixtureImpl implements SqlOperatorFixture {
     return tester;
   }
 
-  @Override public SqlOperatorFixtureImpl withFactory(
+  @Override public SqlOperatorFixture withFactory(
       UnaryOperator<SqlTestFactory> transform) {
     final SqlTestFactory factory = transform.apply(this.factory);
     if (factory == this.factory) {
@@ -140,7 +140,7 @@ class SqlOperatorFixtureImpl implements SqlOperatorFixture {
       assertEquals(1, fields.size(), "expected query to return 1 field");
       final RelDataType actualType = fields.get(0).getType();
       String actual = SqlTests.getTypeString(actualType);
-      assertThat(actual, matcher);
+      assertThat("Query: " + sql.sql, actual, matcher);
     };
   }
 
@@ -163,6 +163,7 @@ class SqlOperatorFixtureImpl implements SqlOperatorFixture {
       SqlValidator validator = factory.createValidator();
       SqlNode n = parseAndValidate(validator, sql);
       assertNotNull(n);
+      tester.checkFails(factory, sap, expectedError, runtime);
     } else {
       checkQueryFails(StringAndPos.of(sql),
           expectedError);
@@ -185,6 +186,7 @@ class SqlOperatorFixtureImpl implements SqlOperatorFixture {
       SqlValidator validator = factory.createValidator();
       SqlNode n = parseAndValidate(validator, sql);
       assertNotNull(n);
+      tester.checkAggFails(factory, expr, inputValues, expectedError, runtime);
     } else {
       checkQueryFails(StringAndPos.of(sql), expectedError);
     }

@@ -29,9 +29,11 @@ import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.test.CalciteAssert;
 import org.apache.calcite.test.schemata.hr.HierarchySchema;
 import org.apache.calcite.test.schemata.hr.HrSchema;
+import org.apache.calcite.test.schemata.hr.HrSchemaBig;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.function.Consumer;
 
 /**
@@ -156,12 +158,12 @@ class EnumerableJoinTest {
                     builder.equals(builder.field(2, 0, "name"),
                         builder.literal("ddd")))
                 .project(builder.field(0))
-                .build()
-    ).returnsUnordered(
-        "empid=100",
-        "empid=110",
-        "empid=150",
-        "empid=200");
+                .build())
+        .returnsUnordered(
+            "empid=100",
+            "empid=110",
+            "empid=150",
+            "empid=200");
   }
 
   /**
@@ -211,26 +213,86 @@ class EnumerableJoinTest {
             + "    EnumerableSort(sort0=[$0], dir0=[ASC])\n"
             + "      EnumerableCalc(expr#0..3=[{inputs}], proj#0..1=[{exprs}])\n"
             + "        EnumerableTableScan(table=[[s, depts]])\n")
-        .returnsUnordered(""
-            + "empid=110; name=Theodore; dept_name=Sales; e_deptno=10; d_deptno=10\n"
-            + "empid=150; name=Sebastian; dept_name=Sales; e_deptno=10; d_deptno=10");
+        .returnsUnordered("empid=110; name=Theodore; dept_name=Sales; e_deptno=10; d_deptno=10",
+            "empid=150; name=Sebastian; dept_name=Sales; e_deptno=10; d_deptno=10");
   }
 
   /** Test case for
    * <a href="https://issues.apache.org/jira/browse/CALCITE-3846">[CALCITE-3846]
    * EnumerableMergeJoin: wrong comparison of composite key with null values</a>. */
-  @Test void testMergeJoinWithCompositeKeyAndNullValues() {
-    tester(false, new HrSchema())
+  @Test void testMergeJoinInnerWithCompositeKeyAndNullValues() {
+    checkMergeJoinWithCompositeKeyAndNullValues(
+        false,
+        JoinRelType.INNER,
+        "empid=110; empid0=110",
+        "empid=100; empid0=100",
+        "empid=200; empid0=200");
+    checkMergeJoinWithCompositeKeyAndNullValues(
+        true,
+        JoinRelType.INNER,
+        "empid=48; empid0=48",
+        "empid=4; empid0=4",
+        "empid=4; empid0=8");
+  }
+
+  @Test void testMergeJoinLeftWithCompositeKeyAndNullValues() {
+    checkMergeJoinWithCompositeKeyAndNullValues(
+        false,
+        JoinRelType.LEFT,
+        "empid=110; empid0=110",
+        "empid=100; empid0=100",
+        "empid=150; empid0=null",
+        "empid=200; empid0=200");
+    checkMergeJoinWithCompositeKeyAndNullValues(
+        true,
+        JoinRelType.LEFT,
+        "empid=48; empid0=48",
+        "empid=47; empid0=null",
+        "empid=4; empid0=4");
+  }
+
+  @Test void testMergeJoinSemiWithCompositeKeyAndNullValues() {
+    checkMergeJoinWithCompositeKeyAndNullValues(
+        false,
+        JoinRelType.SEMI,
+        "empid=110",
+        "empid=100",
+        "empid=200");
+    checkMergeJoinWithCompositeKeyAndNullValues(
+        true,
+        JoinRelType.SEMI,
+        "empid=48",
+        "empid=4",
+        "empid=8");
+  }
+
+  @Test void testMergeJoinAntiWithCompositeKeyAndNullValues() {
+    checkMergeJoinWithCompositeKeyAndNullValues(
+        false,
+        JoinRelType.ANTI,
+        "empid=150");
+    checkMergeJoinWithCompositeKeyAndNullValues(
+        true,
+        JoinRelType.ANTI,
+        "empid=47",
+        "empid=3",
+        "empid=7");
+  }
+
+  private void checkMergeJoinWithCompositeKeyAndNullValues(boolean bigSchema, JoinRelType joinType,
+      String... expected) {
+    CalciteAssert.AssertQuery checker =
+        tester(false, bigSchema ? new HrSchemaBig() : new HrSchema())
         .withHook(Hook.PLANNER, (Consumer<RelOptPlanner>) planner -> {
           planner.addRule(EnumerableRules.ENUMERABLE_MERGE_JOIN_RULE);
           planner.removeRule(EnumerableRules.ENUMERABLE_JOIN_RULE);
         })
         .withRel(builder -> builder
-            .scan("s", "emps")
-            .sort(builder.field("deptno"), builder.field("commission"))
-            .scan("s", "emps")
-            .sort(builder.field("deptno"), builder.field("commission"))
-            .join(JoinRelType.INNER,
+            .scan("s", "emps").as("e1")
+            .sort(builder.field("deptno"), builder.field("commission"), builder.field("empid"))
+            .scan("s", "emps").as("e2")
+            .sort(builder.field("deptno"), builder.field("commission"), builder.field("empid"))
+            .join(joinType,
                 builder.and(
                     builder.equals(
                         builder.field(2, 0, "deptno"),
@@ -238,19 +300,16 @@ class EnumerableJoinTest {
                     builder.equals(
                         builder.field(2, 0, "commission"),
                         builder.field(2, 1, "commission"))))
-            .project(
-                builder.field("empid"))
+            .project(joinType.projectsRight()
+                ? Arrays.asList(builder.field("e1", "empid"), builder.field("e2", "empid"))
+                : Arrays.asList(builder.field("e1", "empid")))
             .build())
-        .explainHookMatches("" // It is important that we have MergeJoin in the plan
-            + "EnumerableCalc(expr#0..4=[{inputs}], empid=[$t0])\n"
-            + "  EnumerableMergeJoin(condition=[AND(=($1, $3), =($2, $4))], joinType=[inner])\n"
-            + "    EnumerableSort(sort0=[$1], sort1=[$2], dir0=[ASC], dir1=[ASC])\n"
-            + "      EnumerableCalc(expr#0..4=[{inputs}], proj#0..1=[{exprs}], commission=[$t4])\n"
-            + "        EnumerableTableScan(table=[[s, emps]])\n"
-            + "    EnumerableSort(sort0=[$0], sort1=[$1], dir0=[ASC], dir1=[ASC])\n"
-            + "      EnumerableCalc(expr#0..4=[{inputs}], deptno=[$t1], commission=[$t4])\n"
-            + "        EnumerableTableScan(table=[[s, emps]])\n")
-        .returnsUnordered("empid=100\nempid=110\nempid=150\nempid=200");
+        .explainHookContains("EnumerableMergeJoin"); // We must have MergeJoin in the plan
+    if (bigSchema) {
+      checker.returnsStartingWith(expected);
+    } else {
+      checker.returnsOrdered(expected);
+    }
   }
 
   /** Test case for
@@ -313,21 +372,22 @@ class EnumerableJoinTest {
             + "    EnumerableCalc(expr#0..4=[{inputs}], expr#5=[2], expr#6=[=($t0, $t5)], empid=[$t0], name=[$t2], $condition=[$t6])\n"
             + "      EnumerableTableScan(table=[[s, emps]])\n"
             + "  EnumerableTableSpool(readType=[LAZY], writeType=[LAZY], table=[[#DELTA#]])\n"
-            + "    EnumerableCalc(expr#0..8=[{inputs}], empid=[$t4], name=[$t6])\n"
-            + "      EnumerableMergeJoin(condition=[=($3, $4)], joinType=[inner])\n"
-            + "        EnumerableSort(sort0=[$3], dir0=[ASC])\n"
-            + "          EnumerableMergeJoin(condition=[=($0, $2)], joinType=[inner])\n"
+            + "    EnumerableCalc(expr#0..4=[{inputs}], empid=[$t3], name=[$t4])\n"
+            + "      EnumerableMergeJoin(condition=[=($2, $3)], joinType=[inner])\n"
+            + "        EnumerableSort(sort0=[$2], dir0=[ASC])\n"
+            + "          EnumerableMergeJoin(condition=[=($0, $1)], joinType=[inner])\n"
             + "            EnumerableSort(sort0=[$0], dir0=[ASC])\n"
-            + "              EnumerableInterpreter\n"
-            + "                BindableTableScan(table=[[#DELTA#]])\n"
+            + "              EnumerableCalc(expr#0..1=[{inputs}], empid=[$t0])\n"
+            + "                EnumerableInterpreter\n"
+            + "                  BindableTableScan(table=[[#DELTA#]])\n"
             + "            EnumerableSort(sort0=[$0], dir0=[ASC])\n"
             + "              EnumerableTableScan(table=[[s, hierarchies]])\n"
             + "        EnumerableSort(sort0=[$0], dir0=[ASC])\n"
-            + "          EnumerableTableScan(table=[[s, emps]])\n")
-        .returnsUnordered(""
-            + "empid=2; name=Emp2\n"
-            + "empid=3; name=Emp3\n"
-            + "empid=5; name=Emp5");
+            + "          EnumerableCalc(expr#0..4=[{inputs}], empid=[$t0], name=[$t2])\n"
+            + "            EnumerableTableScan(table=[[s, emps]])\n")
+        .returnsUnordered("empid=2; name=Emp2",
+            "empid=3; name=Emp3",
+            "empid=5; name=Emp5");
   }
 
   private CalciteAssert.AssertThat tester(boolean forceDecorrelate,

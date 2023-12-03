@@ -44,6 +44,7 @@ import org.xml.sax.SAXException;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.Writer;
 import java.net.URL;
 import java.util.AbstractList;
@@ -52,6 +53,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
@@ -74,18 +76,18 @@ import static java.util.Objects.requireNonNull;
  *     return DiffRepository.lookup(MyTest.class);
  *   }
  * &nbsp;
- *   &#64;Test public void testToUpper() {
+ *   &#64;Test void testToUpper() {
  *     getDiffRepos().assertEquals("${result}", "${string}");
  *   }
  * &nbsp;
- *   &#64;Test public void testToLower() {
+ *   &#64;Test void testToLower() {
  *     getDiffRepos().assertEquals("Multi-line\nstring", "${string}");
  *   }
  * }
  * </code></pre></blockquote>
  *
  * <p>There is an accompanying reference file named after the class,
- * <code>src/test/resources/com/acme/test/MyTest.xml</code>:</p>
+ * <code>src/test/resources/com/acme/test/MyTest.xml</code>:
  *
  * <blockquote><pre><code>
  * &lt;Root&gt;
@@ -108,30 +110,27 @@ import static java.util.Objects.requireNonNull;
  * </code></pre></blockquote>
  *
  * <p>If any of the test cases fails, a log file is generated, called
- * <code>target/surefire/com/acme/test/MyTest.xml</code>, containing the actual
- * output.</p>
- *
- * <p>(Maven sometimes removes this file; if it is not present, run maven with
- * an extra {@code -X} flag.
- * See <a href="http://jira.codehaus.org/browse/SUREFIRE-846">[SUREFIRE-846]</a>
- * for details.)</p>
+ * {@code build/diffrepo/test/com/acme/test/MyTest_actual.xml},
+ * containing the actual output.
  *
  * <p>The log
  * file is otherwise identical to the reference log, so once the log file has
  * been verified, it can simply be copied over to become the new reference
- * log:</p>
+ * log:
  *
- * <blockquote><code>cp target/surefire/com/acme/test/MyTest.xml
- * src/test/resources/com/acme/test/MyTest.xml</code></blockquote>
+ * <blockquote>{@code
+ * cp build/diffrepo/test/com/acme/test/MyTest_actual.xml
+ * src/test/resources/com/acme/test/MyTest.xml
+ * }</blockquote>
  *
  * <p>If a resource or test case does not exist, <code>DiffRepository</code>
  * creates them in the log file. Because DiffRepository is so forgiving, it is
- * very easy to create new tests and test cases.</p>
+ * very easy to create new tests and test cases.
  *
  * <p>The {@link #lookup} method ensures that all test cases share the same
- * instance of the repository. This is important more than one one test case
- * fails. The shared instance ensures that the generated
- * <code>target/surefire/com/acme/test/MyTest.xml</code>
+ * instance of the repository. This is important more than one test case fails.
+ * The shared instance ensures that the generated
+ * {@code build/diffrepo/test/com/acme/test/MyTest_actual.xml}
  * file contains the actual for <em>both</em> test cases.
  */
 public class DiffRepository {
@@ -174,9 +173,25 @@ public class DiffRepository {
   private static final LoadingCache<Key, DiffRepository> REPOSITORY_CACHE =
       CacheBuilder.newBuilder().build(CacheLoader.from(Key::toRepo));
 
+  private static final ThreadLocal<@Nullable DocumentBuilderFactory> DOCUMENT_BUILDER_FACTORY =
+      ThreadLocal.withInitial(() -> {
+        final DocumentBuilderFactory documentBuilderFactory = DocumentBuilderFactory.newInstance();
+        documentBuilderFactory.setXIncludeAware(false);
+        documentBuilderFactory.setExpandEntityReferences(false);
+        documentBuilderFactory.setNamespaceAware(true);
+        try {
+          documentBuilderFactory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+          documentBuilderFactory
+              .setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        } catch (final ParserConfigurationException e) {
+          throw new IllegalStateException("Document Builder configuration failed", e);
+        }
+        return documentBuilderFactory;
+      });
+
   //~ Instance fields --------------------------------------------------------
 
-  private final DiffRepository baseRepository;
+  private final @Nullable DiffRepository baseRepository;
   private final int indent;
   private final ImmutableSortedSet<String> outOfOrderTests;
   private Document doc;
@@ -197,7 +212,7 @@ public class DiffRepository {
    * @param indent    Indentation of XML file
    */
   private DiffRepository(URL refFile, File logFile,
-      DiffRepository baseRepository, Filter filter, int indent) {
+      @Nullable DiffRepository baseRepository, Filter filter, int indent) {
     this.baseRepository = baseRepository;
     this.filter = filter;
     this.indent = indent;
@@ -207,19 +222,17 @@ public class DiffRepository {
     this.modCount = 0;
 
     // Load the document.
-    DocumentBuilderFactory fac = DocumentBuilderFactory.newInstance();
     try {
-      DocumentBuilder docBuilder = fac.newDocumentBuilder();
-      try {
+      DocumentBuilder docBuilder =
+          Nullness.castNonNull(DOCUMENT_BUILDER_FACTORY.get()).newDocumentBuilder();
+      try (InputStream inputStream = refFile.openStream()) {
         // Parse the reference file.
-        this.doc = docBuilder.parse(refFile.openStream());
-        // Don't write a log file yet -- as far as we know, it's still
-        // identical.
+        this.doc = docBuilder.parse(inputStream);
+        // Don't write a log file yet -- as far as we know, it's still identical.
       } catch (IOException e) {
         // There's no reference file. Create and write a log file.
         this.doc = docBuilder.newDocument();
-        this.doc.appendChild(
-            doc.createElement(ROOT_TAG));
+        this.doc.appendChild(doc.createElement(ROOT_TAG));
         flushDoc();
       }
       this.root = doc.getDocumentElement();
@@ -230,6 +243,27 @@ public class DiffRepository {
   }
 
   //~ Methods ----------------------------------------------------------------
+
+  public void checkActualAndReferenceFiles() {
+    if (!logFile.exists()) {
+      return;
+    }
+
+    final String resourceFile =
+        Sources.of(refFile).file().getPath().replace(
+            String.join(File.separator, "build", "resources", "test"),
+            String.join(File.separator, "src", "test", "resources"));
+
+    final String diff = DiffTestCase.diff(new File(resourceFile), logFile);
+
+    if (!diff.isEmpty()) {
+      throw new IllegalArgumentException("Actual and reference files differ. "
+          + "If you are adding new tests, replace the reference file with the "
+          + "current actual file, after checking its content."
+          + "\ndiff " + logFile.getAbsolutePath() + " " + resourceFile + "\n"
+          + diff);
+    }
+  }
 
   private static URL findFile(Class<?> clazz, final String suffix) {
     // The reference file for class "com.foo.Bar" is "com/foo/Bar.xml"
@@ -372,7 +406,7 @@ public class DiffRepository {
    *                      a base repository, it has overrides="true"
    * @return TestCase element, or null if not found
    */
-  private synchronized Element getTestCaseElement(
+  private synchronized @Nullable Element getTestCaseElement(
       final String testCaseName,
       boolean checkOverride,
       List<Pair<String, Element>> elements) {
@@ -895,7 +929,9 @@ public class DiffRepository {
     DiffRepository toRepo() {
       final URL refFile = findFile(clazz, ".xml");
       final String refFilePath = Sources.of(refFile).file().getAbsolutePath();
-      final String logFilePath = refFilePath.replace(".xml", "_actual.xml");
+      final String logFilePath = refFilePath
+          .replace("resources", "diffrepo")
+          .replace(".xml", "_actual.xml");
       final File logFile = new File(logFilePath);
       assert !refFilePath.equals(logFile.getAbsolutePath());
       return new DiffRepository(refFile, logFile, baseRepository, filter,

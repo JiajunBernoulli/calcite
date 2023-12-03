@@ -26,12 +26,16 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.externalize.RelDotWriter;
 import org.apache.calcite.rel.logical.LogicalIntersect;
 import org.apache.calcite.rel.logical.LogicalUnion;
+import org.apache.calcite.rel.logical.LogicalValues;
 import org.apache.calcite.rel.rules.CoerceInputsRule;
 import org.apache.calcite.rel.rules.CoreRules;
 import org.apache.calcite.sql.SqlExplainLevel;
+import org.apache.calcite.tools.RelBuilder;
 
 import com.google.common.collect.ImmutableList;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 
 import java.io.PrintWriter;
@@ -39,6 +43,7 @@ import java.io.StringWriter;
 
 import static org.apache.calcite.test.Matchers.isLinux;
 
+import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -81,11 +86,21 @@ class HepPlannerTest {
       + "  select ENAME, 50022371 as cat_id, '100' as cat_name, 0 as require_free_postage, 0 as require_15return, 0 as require_48hour,0 as require_insurance from emp where EMPNO = 20171216 and MGR = 0 and ENAME = 'Y' and SAL = 50022371\n"
       + ") a";
 
+  @Nullable
+  private static DiffRepository diffRepos = null;
+
   //~ Methods ----------------------------------------------------------------
 
+  @AfterAll
+  public static void checkActualAndReferenceFiles() {
+    diffRepos.checkActualAndReferenceFiles();
+  }
+
   public RelOptFixture fixture() {
-    return RelOptFixture.DEFAULT
+    RelOptFixture fixture = RelOptFixture.DEFAULT
         .withDiffRepos(DiffRepository.lookup(HepPlannerTest.class));
+    diffRepos = fixture.diffRepos();
+    return fixture;
   }
 
   /** Sets the SQL statement for a test. */
@@ -355,8 +370,9 @@ class HepPlannerTest {
     HepPlanner planner = new HepPlanner(HepProgram.builder().build());
     RelNode tableRel = sql("select * from dept").toRel();
     RelNode queryRel = tableRel;
-    RelOptMaterialization mat1 = new RelOptMaterialization(
-        tableRel, queryRel, null, ImmutableList.of("default", "mv"));
+    RelOptMaterialization mat1 =
+        new RelOptMaterialization(tableRel, queryRel, null,
+            ImmutableList.of("default", "mv"));
     planner.addMaterialization(mat1);
     assertEquals(planner.getMaterializations().size(), 1);
     assertEquals(planner.getMaterializations().get(0), mat1);
@@ -407,5 +423,24 @@ class HepPlannerTest {
 
     @Override public void relChosen(RelChosenEvent event) {
     }
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5401">[CALCITE-5401]
+   * Rule fired by HepPlanner can return Volcano's RelSubset</a>. */
+  @Test void testAggregateRemove() {
+    final RelBuilder builder = RelBuilderTest.createBuilder(c -> c.withAggregateUnique(true));
+    final RelNode root =
+        builder
+            .values(new String[]{"i"}, 1, 2, 3)
+            .distinct()
+            .build();
+    final HepProgram program = new HepProgramBuilder()
+        .addRuleInstance(CoreRules.AGGREGATE_REMOVE)
+        .build();
+    final HepPlanner planner = new HepPlanner(program);
+    planner.setRoot(root);
+    final RelNode result = planner.findBestExp();
+    assertThat(result, is(instanceOf(LogicalValues.class)));
   }
 }

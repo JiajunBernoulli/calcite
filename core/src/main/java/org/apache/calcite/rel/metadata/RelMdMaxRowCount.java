@@ -28,6 +28,7 @@ import org.apache.calcite.rel.core.Intersect;
 import org.apache.calcite.rel.core.Join;
 import org.apache.calcite.rel.core.Minus;
 import org.apache.calcite.rel.core.Project;
+import org.apache.calcite.rel.core.Sample;
 import org.apache.calcite.rel.core.Sort;
 import org.apache.calcite.rel.core.TableModify;
 import org.apache.calcite.rel.core.TableScan;
@@ -101,6 +102,10 @@ public class RelMdMaxRowCount
   }
 
   public @Nullable Double getMaxRowCount(Exchange rel, RelMetadataQuery mq) {
+    return mq.getMaxRowCount(rel.getInput());
+  }
+
+  public @Nullable Double getMaxRowCount(Sample rel, RelMetadataQuery mq) {
     return mq.getMaxRowCount(rel.getInput());
   }
 
@@ -181,7 +186,12 @@ public class RelMdMaxRowCount
     return left * right;
   }
 
-  public Double getMaxRowCount(TableScan rel, RelMetadataQuery mq) {
+  public @Nullable Double getMaxRowCount(TableScan rel, RelMetadataQuery mq) {
+    final BuiltInMetadata.MaxRowCount.Handler handler =
+        rel.getTable().unwrap(BuiltInMetadata.MaxRowCount.Handler.class);
+    if (handler != null) {
+      return handler.getMaxRowCount(rel, mq);
+    }
     // For typical tables, there is no upper bound to the number of rows.
     return Double.POSITIVE_INFINITY;
   }
@@ -203,7 +213,7 @@ public class RelMdMaxRowCount
     for (RelNode node : rel.getRels()) {
       if (node instanceof Sort) {
         Sort sort = (Sort) node;
-        if (sort.fetch != null) {
+        if (sort.fetch instanceof RexLiteral) {
           return (double) RexLiteral.intValue(sort.fetch);
         }
       }

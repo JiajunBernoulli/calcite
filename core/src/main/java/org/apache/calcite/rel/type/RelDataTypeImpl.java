@@ -47,7 +47,7 @@ import static java.util.Objects.requireNonNull;
  * {@link RelDataType}.
  *
  * <p>Identity is based upon the {@link #digest} field, which each derived class
- * should set during construction.</p>
+ * should set during construction.
  */
 public abstract class RelDataTypeImpl
     implements RelDataType, RelDataTypeFamily {
@@ -307,9 +307,7 @@ public abstract class RelDataTypeImpl
    * subclass constructor once the type is fully defined.
    */
   @SuppressWarnings("method.invocation.invalid")
-  protected void computeDigest(
-      @UnknownInitialization RelDataTypeImpl this
-  ) {
+  protected void computeDigest(@UnknownInitialization RelDataTypeImpl this) {
     StringBuilder sb = new StringBuilder();
     generateTypeString(sb, true);
     if (!isNullable()) {
@@ -360,7 +358,7 @@ public abstract class RelDataTypeImpl
    * that will create a type {@code typeName}.
    *
    * <p>For example, {@code proto(SqlTypeName.DATE), false}
-   * will create {@code DATE NOT NULL}.</p>
+   * will create {@code DATE NOT NULL}.
    *
    * @param typeName Type name
    * @param nullable Whether nullable
@@ -379,7 +377,7 @@ public abstract class RelDataTypeImpl
    * that will create a type {@code typeName(precision)}.
    *
    * <p>For example, {@code proto(SqlTypeName.VARCHAR, 100, false)}
-   * will create {@code VARCHAR(100) NOT NULL}.</p>
+   * will create {@code VARCHAR(100) NOT NULL}.
    *
    * @param typeName Type name
    * @param precision Precision
@@ -399,7 +397,7 @@ public abstract class RelDataTypeImpl
    * that will create a type {@code typeName(precision, scale)}.
    *
    * <p>For example, {@code proto(SqlTypeName.DECIMAL, 7, 2, false)}
-   * will create {@code DECIMAL(7, 2) NOT NULL}.</p>
+   * will create {@code DECIMAL(7, 2) NOT NULL}.
    *
    * @param typeName Type name
    * @param precision Precision

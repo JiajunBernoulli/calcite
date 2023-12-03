@@ -41,9 +41,12 @@ import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeImpl;
 import org.apache.calcite.rel.type.RelProtoDataType;
+import org.apache.calcite.runtime.AccumOperation;
 import org.apache.calcite.runtime.CalciteException;
-import org.apache.calcite.runtime.GeoFunctions;
+import org.apache.calcite.runtime.CollectOperation;
 import org.apache.calcite.runtime.Hook;
+import org.apache.calcite.runtime.SpatialTypeFunctions;
+import org.apache.calcite.runtime.UnionOperation;
 import org.apache.calcite.schema.Schema;
 import org.apache.calcite.schema.SchemaPlus;
 import org.apache.calcite.schema.SchemaVersion;
@@ -53,6 +56,7 @@ import org.apache.calcite.schema.TableFunction;
 import org.apache.calcite.schema.Wrapper;
 import org.apache.calcite.schema.impl.AbstractSchema;
 import org.apache.calcite.schema.impl.AbstractTable;
+import org.apache.calcite.schema.impl.AggregateFunctionImpl;
 import org.apache.calcite.schema.impl.TableFunctionImpl;
 import org.apache.calcite.schema.impl.ViewTable;
 import org.apache.calcite.schema.impl.ViewTableMacro;
@@ -60,7 +64,7 @@ import org.apache.calcite.sql.SqlCall;
 import org.apache.calcite.sql.SqlDialect;
 import org.apache.calcite.sql.SqlExplainLevel;
 import org.apache.calcite.sql.SqlNode;
-import org.apache.calcite.sql.fun.SqlGeoFunctions;
+import org.apache.calcite.sql.fun.SqlSpatialTypeFunctions;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql.validate.SqlConformanceEnum;
 import org.apache.calcite.sql.validate.SqlValidatorException;
@@ -153,7 +157,7 @@ public class CalciteAssert {
    * Which database to use for tests that require a JDBC data source.
    *
    * @see CalciteSystemProperty#TEST_DB
-   **/
+   */
   public static final DatabaseInstance DB =
       DatabaseInstance.valueOf(CalciteSystemProperty.TEST_DB.value());
 
@@ -229,7 +233,7 @@ public class CalciteAssert {
   }
 
   /** Short-hand for
-   *  {@code CalciteAssert.that().with(Config.EMPTY).withModel(model)}. */
+   * {@code CalciteAssert.that().with(Config.EMPTY).withModel(model)}. */
   public static AssertThat model(String model) {
     return that().withModel(model);
   }
@@ -402,9 +406,32 @@ public class CalciteAssert {
   /** Checks that the {@link ResultSet} returns the given set of lines,
    * optionally sorting.
    *
+   * <p>The lines must not contain line breaks. If you have written
+   *
+   * <pre>{@code
+   * checkUnordered("line1\n"
+   *     + "line2")
+   * }</pre>
+   *
+   * <p>you should instead write
+   *
+   * <pre>{@code
+   * checkUnordered("line1",
+   *     "line2")
+   * }</pre>
+   *
+   * <p>so that result-checking is order-independent.
+   *
    * @see Matchers#returnsUnordered(String...) */
   static Consumer<ResultSet> checkResult(final boolean sort,
       final boolean head, final String... lines) {
+    // Check that none of the lines contains a line break.
+    for (String line : lines) {
+      if (line.contains("\n")) {
+        throw new AssertionError("expected line has line breaks: " + line);
+      }
+    }
+
     return resultSet -> {
       try {
         final List<String> expectedList = Lists.newArrayList(lines);
@@ -654,6 +681,17 @@ public class CalciteAssert {
       boolean materializationsEnabled,
       final Consumer<RelNode> convertChecker,
       final Consumer<RelNode> substitutionChecker) {
+    assertPrepare(connection, sql, materializationsEnabled, ImmutableList.of(),
+        convertChecker, substitutionChecker);
+  }
+
+  static void assertPrepare(
+      Connection connection,
+      String sql,
+      boolean materializationsEnabled,
+      List<Pair<Hook, Consumer>> hooks,
+      final Consumer<RelNode> convertChecker,
+      final Consumer<RelNode> substitutionChecker) {
     try (Closer closer = new Closer()) {
       if (convertChecker != null) {
         closer.add(
@@ -662,6 +700,9 @@ public class CalciteAssert {
       if (substitutionChecker != null) {
         closer.add(
             Hook.SUB.addThread(substitutionChecker));
+      }
+      for (Pair<Hook, Consumer> hook : hooks) {
+        closer.add(hook.left.addThread(hook.right));
       }
       ((CalciteConnection) connection).getProperties().setProperty(
           CalciteConnectionProperty.MATERIALIZATIONS_ENABLED.camelName(),
@@ -723,7 +764,7 @@ public class CalciteAssert {
     loop:
       for (Method method1 : aClass.getMethods()) {
         if (method1.getName().equals(methodName)
-            && method1.getParameterTypes().length == args.length
+            && method1.getParameterCount() == args.length
             && Modifier.isPublic(method1.getDeclaringClass().getModifiers())) {
           for (Pair<Object, Class> pair
               : Pair.zip(args, (Class[]) method1.getParameterTypes())) {
@@ -773,8 +814,8 @@ public class CalciteAssert {
           new ReflectiveSchema(new FoodmartSchema()));
     case JDBC_SCOTT:
       cs = DatabaseInstance.HSQLDB.scott;
-      dataSource = JdbcSchema.dataSource(cs.url, cs.driver, cs.username,
-          cs.password);
+      dataSource =
+          JdbcSchema.dataSource(cs.url, cs.driver, cs.username, cs.password);
       return rootSchema.add(schema.schemaName,
           JdbcSchema.create(rootSchema, schema.schemaName, dataSource,
               cs.catalog, cs.schema));
@@ -820,25 +861,29 @@ public class CalciteAssert {
       return rootSchema.add("foodmart2", new CloneSchema(foodmart));
     case GEO:
       ModelHandler.addFunctions(rootSchema, null, emptyPath,
-          GeoFunctions.class.getName(), "*", true);
+          SpatialTypeFunctions.class.getName(), "*", true);
       ModelHandler.addFunctions(rootSchema, null, emptyPath,
-          SqlGeoFunctions.class.getName(), "*", true);
+          SqlSpatialTypeFunctions.class.getName(), "*", true);
+      rootSchema.add("ST_UNION", AggregateFunctionImpl.create(UnionOperation.class));
+      rootSchema.add("ST_ACCUM", AggregateFunctionImpl.create(AccumOperation.class));
+      rootSchema.add("ST_COLLECT", AggregateFunctionImpl.create(CollectOperation.class));
       final SchemaPlus s =
           rootSchema.add(schema.schemaName, new AbstractSchema());
       ModelHandler.addFunctions(s, "countries", emptyPath,
           CountriesTableFunction.class.getName(), null, false);
       final String sql = "select * from table(\"countries\"(true))";
-      final ViewTableMacro viewMacro = ViewTable.viewMacro(rootSchema, sql,
-          ImmutableList.of("GEO"), emptyPath, false);
+      final ViewTableMacro viewMacro =
+          ViewTable.viewMacro(rootSchema, sql,
+              ImmutableList.of("GEO"), emptyPath, false);
       s.add("countries", viewMacro);
-
       ModelHandler.addFunctions(s, "states", emptyPath,
           StatesTableFunction.class.getName(), "states", false);
       final String sql2 = "select \"name\",\n"
           + " ST_PolyFromText(\"geom\") as \"geom\"\n"
           + "from table(\"states\"(true))";
-      final ViewTableMacro viewMacro2 = ViewTable.viewMacro(rootSchema, sql2,
-          ImmutableList.of("GEO"), emptyPath, false);
+      final ViewTableMacro viewMacro2 =
+          ViewTable.viewMacro(rootSchema, sql2,
+              ImmutableList.of("GEO"), emptyPath, false);
       s.add("states", viewMacro2);
 
       ModelHandler.addFunctions(s, "parks", emptyPath,
@@ -846,8 +891,9 @@ public class CalciteAssert {
       final String sql3 = "select \"name\",\n"
           + " ST_PolyFromText(\"geom\") as \"geom\"\n"
           + "from table(\"parks\"(true))";
-      final ViewTableMacro viewMacro3 = ViewTable.viewMacro(rootSchema, sql3,
-          ImmutableList.of("GEO"), emptyPath, false);
+      final ViewTableMacro viewMacro3 =
+          ViewTable.viewMacro(rootSchema, sql3,
+              ImmutableList.of("GEO"), emptyPath, false);
       s.add("parks", viewMacro3);
 
       return s;
@@ -984,6 +1030,9 @@ public class CalciteAssert {
       TableFunction tableFunction =
           TableFunctionImpl.create(Smalls.SimpleTableFunction.class, "eval");
       aux.add("TBLFUN", tableFunction);
+      TableFunction tableFunctionIdentity =
+          TableFunctionImpl.create(Smalls.IdentityTableFunction.class, "eval");
+      aux.add("TBLFUN_IDENTITY", tableFunctionIdentity);
       final String simpleSql = "select *\n"
           + "from (values\n"
           + "    ('ABC', 1),\n"
@@ -1140,7 +1189,7 @@ public class CalciteAssert {
       return with(connectionFactory.with(property, value));
     }
 
-    /** Sets the Lex property. **/
+    /** Sets the Lex property. */
     public AssertThat with(Lex lex) {
       return with(CalciteConnectionProperty.LEX, lex);
     }
@@ -1212,9 +1261,10 @@ public class CalciteAssert {
             + "]"
             + model.substring(endIndex + 1);
       } else if (model.contains("type: ")) {
-        model2 = model.replaceFirst("type: ",
-            java.util.regex.Matcher.quoteReplacement(buf + ",\n"
-            + "type: "));
+        model2 =
+            model.replaceFirst("type: ",
+                java.util.regex.Matcher.quoteReplacement(buf + ",\n"
+                    + "type: "));
       } else {
         throw new AssertionError("do not know where to splice");
       }
@@ -1523,14 +1573,14 @@ public class CalciteAssert {
 
     public AssertQuery convertMatches(final Consumer<RelNode> checker) {
       return withConnection(connection ->
-        assertPrepare(connection, sql, this.materializationsEnabled,
+        assertPrepare(connection, sql, this.materializationsEnabled, hooks,
             checker, null));
     }
 
     public AssertQuery substitutionMatches(
         final Consumer<RelNode> checker) {
       return withConnection(connection ->
-        assertPrepare(connection, sql, materializationsEnabled, null, checker));
+        assertPrepare(connection, sql, materializationsEnabled, hooks, null, checker));
     }
 
     public AssertQuery explainContains(String expected) {
@@ -1544,10 +1594,10 @@ public class CalciteAssert {
      *
      * <p>Note: this API does NOT trigger the query, so you need to use something like
      * {@link #returns(String)}, or {@link #returnsUnordered(String...)} to trigger query
-     * execution</p>
+     * execution
      *
      * <p>Note: prefer using {@link #explainHookMatches(String)} if you assert
-     * the full plan tree as it produces slightly cleaner messages</p>
+     * the full plan tree as it produces slightly cleaner messages
      *
      * @param expectedPlan expected execution plan. The plan is normalized to LF line endings
      * @return updated assert query
@@ -1564,10 +1614,10 @@ public class CalciteAssert {
      *
      * <p>Note: this API does NOT trigger the query, so you need to use something like
      * {@link #returns(String)}, or {@link #returnsUnordered(String...)} to trigger query
-     * execution</p>
+     * execution
      *
      * <p>Note: prefer using {@link #explainHookMatches(SqlExplainLevel, Matcher)} if you assert
-     * the full plan tree as it produces slightly cleaner messages</p>
+     * the full plan tree as it produces slightly cleaner messages
      *
      * @param sqlExplainLevel the level of explain plan
      * @param expectedPlan expected execution plan. The plan is normalized to LF line endings
@@ -1585,7 +1635,7 @@ public class CalciteAssert {
      *
      * <p>Note: this API does NOT trigger the query, so you need to use something like
      * {@link #returns(String)}, or {@link #returnsUnordered(String...)} to trigger query
-     * execution</p>
+     * execution.
      *
      * @param expectedPlan expected execution plan. The plan is normalized to LF line endings
      * @return updated assert query
@@ -1602,7 +1652,7 @@ public class CalciteAssert {
      *
      * <p>Note: this API does NOT trigger the query, so you need to use something like
      * {@link #returns(String)}, or {@link #returnsUnordered(String...)} to trigger query
-     * execution</p>
+     * execution.
      *
      * @param planMatcher execution plan matcher. The plan is normalized to LF line endings
      * @return updated assert query
@@ -1619,7 +1669,7 @@ public class CalciteAssert {
      *
      * <p>Note: this API does NOT trigger the query, so you need to use something like
      * {@link #returns(String)}, or {@link #returnsUnordered(String...)} to trigger query
-     * execution</p>
+     * execution.
      *
      * @param sqlExplainLevel the level of explain plan
      * @param planMatcher execution plan matcher. The plan is normalized to LF line endings
@@ -1709,7 +1759,19 @@ public class CalciteAssert {
     @Deprecated // to be removed before 2.0
     public final AssertQuery queryContains(
         com.google.common.base.Function<List, Void> predicate1) {
-      return queryContains((Consumer<List>) predicate1::apply);
+      return queryContains(functionConsumer(predicate1));
+    }
+
+    /** Converts a Guava function into a JDK consumer. */
+    @SuppressWarnings("Guava")
+    private static <T, R> Consumer<T> functionConsumer(
+        com.google.common.base.Function<T, R> handler) {
+      return t -> {
+        // Squash ErrorProne warnings that the return of the function is not
+        // used.
+        R r = handler.apply(t);
+        Util.discard(r);
+      };
     }
 
     /** Sets a limit on the number of rows returned. -1 means no limit. */

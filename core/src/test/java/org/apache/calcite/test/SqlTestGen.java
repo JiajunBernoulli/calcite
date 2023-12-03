@@ -29,10 +29,12 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 import java.io.File;
 import java.io.PrintWriter;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
+
+import static org.apache.calcite.util.ReflectUtil.isPublic;
+import static org.apache.calcite.util.ReflectUtil.isStatic;
 
 /**
  * Utility to generate a SQL script from validator test.
@@ -75,9 +77,9 @@ class SqlTestGen {
     List<Method> list = new ArrayList<>();
     for (Method method : clazz.getMethods()) {
       if (method.getName().startsWith("test")
-          && Modifier.isPublic(method.getModifiers())
-          && !Modifier.isStatic(method.getModifiers())
-          && (method.getParameterTypes().length == 0)
+          && isPublic(method)
+          && !isStatic(method)
+          && (method.getParameterCount() == 0)
           && (method.getReturnType() == Void.TYPE)) {
         list.add(method);
       }

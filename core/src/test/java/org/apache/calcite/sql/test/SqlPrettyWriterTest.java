@@ -25,14 +25,17 @@ import org.apache.calcite.sql.parser.SqlParser;
 import org.apache.calcite.sql.pretty.SqlPrettyWriter;
 import org.apache.calcite.test.DiffRepository;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import static org.apache.calcite.test.Matchers.isLinux;
 
+import static org.hamcrest.CoreMatchers.instanceOf;
+import static org.hamcrest.CoreMatchers.notNullValue;
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.instanceOf;
-import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.hasToString;
 
 /**
  * Unit test for {@link SqlPrettyWriter}.
@@ -49,8 +52,19 @@ class SqlPrettyWriterTest {
   private static final SqlPrettyWriterFixture LOCAL_FIXTURE =
       FIXTURE.withDiffRepos(DiffRepository.lookup(SqlPrettyWriterTest.class));
 
+  @Nullable
+  private static DiffRepository diffRepos = null;
+
+  @AfterAll
+  public static void checkActualAndReferenceFiles() {
+    if (diffRepos != null) {
+      diffRepos.checkActualAndReferenceFiles();
+    }
+  }
+
   /** Returns the default fixture for tests. Sub-classes may override. */
   protected SqlPrettyWriterFixture fixture() {
+    diffRepos = LOCAL_FIXTURE.diffRepos();
     return LOCAL_FIXTURE;
   }
 
@@ -398,7 +412,7 @@ class SqlPrettyWriterTest {
           assertThat(root, instanceOf(SqlSelect.class));
           SqlNode from = ((SqlSelect) root).getFrom();
           assertThat(from, notNullValue());
-          assertThat(from.toString(), isLinux(expectedJoinString));
+          assertThat(from, hasToString(isLinux(expectedJoinString)));
           return from;
         });
   }
