@@ -75,6 +75,8 @@ import org.apache.calcite.util.Util;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.immutables.value.Value;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -100,6 +102,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Unit test for {@link org.apache.calcite.rel.hint.RelHint}.
+ * See {@link RelOptRulesTest} for an explanation of how to add tests.
  */
 class SqlHintsConverterTest {
 
@@ -117,11 +120,22 @@ class SqlHintsConverterTest {
           .withConfig(c ->
               c.withHintStrategyTable(HintTools.HINT_STRATEGY_TABLE));
 
+  @Nullable
+  private static DiffRepository diffRepos = null;
+
+  @AfterAll
+  public static void checkActualAndReferenceFiles() {
+    if (diffRepos != null) {
+      diffRepos.checkActualAndReferenceFiles();
+    }
+  }
+
   protected Fixture fixture() {
     return FIXTURE;
   }
 
   protected RelOptFixture ruleFixture() {
+    diffRepos = RULE_FIXTURE.diffRepos();
     return RULE_FIXTURE;
   }
 
@@ -239,6 +253,13 @@ class SqlHintsConverterTest {
   @Test void testWindowHints() {
     final String sql = "select /*+ mini_batch */ last_value(deptno)\n"
         + "over (order by empno rows 2 following) from emp";
+    sql(sql).ok();
+  }
+
+  @Test void testSnapshotHints() {
+    final String sql = "select /*+ fast_snapshot(products_temporal) */ stream * from\n"
+        + " orders join products_temporal for system_time as of timestamp '2022-08-11 15:00:00'\n"
+        + " on orders.productid = products_temporal.productid";
     sql(sql).ok();
   }
 
@@ -495,6 +516,48 @@ class SqlHintsConverterTest {
         .check();
   }
 
+  @Test void testHintsPropagationInVolcanoPlannerRules2() {
+    final String sql = "select /*+ no_hash_join */ ename, job\n"
+        + "from emp where not exists (select 1 from dept where emp.deptno = dept.deptno)";
+    final RelHint hint = RelHint.builder("NO_HASH_JOIN")
+        .inheritPath(0, 0)
+        .build();
+    // Validate Volcano planner.
+    RuleSet ruleSet = RuleSets.ofList(
+        MockEnumerableJoinRule.create(hint) // Rule to validate the hint.
+    );
+    ruleFixture()
+        .sql(sql)
+        .withTrim(true)
+        .withVolcanoPlanner(false, p -> {
+          p.addRelTraitDef(RelCollationTraitDef.INSTANCE);
+          RelOptUtil.registerDefaultRules(p, false, false);
+          ruleSet.forEach(p::addRule);
+        })
+        .check();
+  }
+
+  @Test void testHintsPropagationInVolcanoPlannerRules3() {
+    final String sql = "select /*+ no_hash_join */ ename, job\n"
+        + "from emp where not exists (select 1 from dept where emp.deptno = dept.deptno) order by ename";
+    final RelHint hint = RelHint.builder("NO_HASH_JOIN")
+        .inheritPath(0, 0, 0)
+        .build();
+    // Validate Volcano planner.
+    RuleSet ruleSet = RuleSets.ofList(
+        MockEnumerableJoinRule.create(hint) // Rule to validate the hint.
+    );
+    ruleFixture()
+        .sql(sql)
+        .withTrim(true)
+        .withVolcanoPlanner(false, p -> {
+          p.addRelTraitDef(RelCollationTraitDef.INSTANCE);
+          RelOptUtil.registerDefaultRules(p, false, false);
+          ruleSet.forEach(p::addRule);
+        })
+        .check();
+  }
+
   @Test void testHintsPropagateWithDifferentKindOfRels() {
     final String sql = "select /*+ AGG_STRATEGY(TWO_PHASE) */\n"
         + "ename, avg(sal)\n"
@@ -534,6 +597,24 @@ class SqlHintsConverterTest {
           ruleSet.forEach(planner::addRule);
         })
         .check();
+  }
+
+  @Test void testHintExcludeRules() {
+    final String sql = "select empno from (select * from "
+            + "(select /*+ preserved_project */ empno, ename, deptno from emp)"
+            + " where deptno = 20)";
+
+    final RelNode rel = ruleFixture().sql(sql).toRel();
+    HepProgram program = new HepProgramBuilder()
+            .addRuleInstance(CoreRules.FILTER_PROJECT_TRANSPOSE)
+            .build();
+    HepPlanner planner = new HepPlanner(program);
+    planner.setRoot(rel);
+    RelNode newRel = planner.findBestExp();
+    Assertions.assertTrue(rel.deepEquals(newRel),
+        "Expected:\n"
+        + RelOptUtil.toString(rel) + "Computed:\n"
+        + RelOptUtil.toString(newRel));
   }
 
   //~ Methods ----------------------------------------------------------------
@@ -847,6 +928,11 @@ class SqlHintsConverterTest {
           if (window.getHints().size() > 0) {
             this.hintsCollect.add("Window:" + window.getHints());
           }
+        } else if (other instanceof Snapshot) {
+          Snapshot snapshot = (Snapshot) other;
+          if (snapshot.getHints().size() > 0) {
+            this.hintsCollect.add("Snapshot:" + snapshot.getHints());
+          }
         }
         return super.visit(other);
       }
@@ -936,10 +1022,14 @@ class SqlHintsConverterTest {
         .hintStrategy("async_merge", HintPredicates.SORT)
         .hintStrategy("mini_batch",
                 HintPredicates.and(HintPredicates.WINDOW, HintPredicates.PROJECT))
+        .hintStrategy("fast_snapshot", HintPredicates.SNAPSHOT)
         .hintStrategy("use_merge_join",
             HintStrategy.builder(
                 HintPredicates.and(HintPredicates.JOIN, joinWithFixedTableName()))
                 .excludedRules(EnumerableRules.ENUMERABLE_JOIN_RULE).build())
+              .hintStrategy(
+                  "preserved_project", HintStrategy.builder(
+               HintPredicates.PROJECT).excludedRules(CoreRules.FILTER_PROJECT_TRANSPOSE).build())
         .build();
     }
 
