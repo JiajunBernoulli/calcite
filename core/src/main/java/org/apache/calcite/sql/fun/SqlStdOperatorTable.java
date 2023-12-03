@@ -1415,6 +1415,15 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
   @Deprecated // to be removed before 2.0
   public static final SqlFunction JSON_STORAGE_SIZE = SqlLibraryOperators.JSON_STORAGE_SIZE;
 
+  @Deprecated // to be removed before 2.0
+  public static final SqlFunction JSON_INSERT = SqlLibraryOperators.JSON_INSERT;
+
+  @Deprecated // to be removed before 2.0
+  public static final SqlFunction JSON_REPLACE = SqlLibraryOperators.JSON_REPLACE;
+
+  @Deprecated // to be removed before 2.0
+  public static final SqlFunction JSON_SET = SqlLibraryOperators.JSON_SET;
+
   public static final SqlJsonArrayAggAggFunction JSON_ARRAYAGG =
       new SqlJsonArrayAggAggFunction(SqlKind.JSON_ARRAYAGG,
           SqlJsonConstructorNullClause.ABSENT_ON_NULL);
@@ -1889,7 +1898,8 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
 
   /** The <code>TIMESTAMPDIFF</code> function. */
   public static final SqlFunction TIMESTAMP_DIFF =
-      new SqlTimestampDiffFunction("TIMESTAMPDIFF");
+      new SqlTimestampDiffFunction("TIMESTAMPDIFF",
+          OperandTypes.family(SqlTypeFamily.ANY, SqlTypeFamily.TIMESTAMP, SqlTypeFamily.TIMESTAMP));
 
   /**
    * Use of the <code>IN_FENNEL</code> operator forces the argument to be
