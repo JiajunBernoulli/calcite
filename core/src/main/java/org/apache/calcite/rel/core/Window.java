@@ -189,6 +189,7 @@ public abstract class Window extends SingleRel implements Hintable {
 
   /**
    * Returns constants that are additional inputs of current relation.
+   *
    * @return constants that are additional inputs of current relation
    */
   public List<RexLiteral> getConstants() {
@@ -269,9 +270,7 @@ public abstract class Window extends SingleRel implements Hintable {
     }
 
     @RequiresNonNull({"keys", "orderKeys", "lowerBound", "upperBound", "aggCalls"})
-    private String computeString(
-        @UnderInitialization Group this
-    ) {
+    private String computeString(@UnderInitialization Group this) {
       final StringBuilder buf = new StringBuilder("window(");
       final int i = buf.length();
       if (!keys.isEmpty()) {
@@ -279,7 +278,10 @@ public abstract class Window extends SingleRel implements Hintable {
         buf.append(keys);
       }
       if (!orderKeys.getFieldCollations().isEmpty()) {
-        buf.append(buf.length() == i ? "order by " : " order by ");
+        if (buf.length() > i) {
+          buf.append(' ');
+        }
+        buf.append("order by ");
         buf.append(orderKeys);
       }
       if (orderKeys.getFieldCollations().isEmpty()
@@ -301,14 +303,20 @@ public abstract class Window extends SingleRel implements Hintable {
         // which is NOT equivalent to
         // "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
       } else {
-        buf.append(isRows ? " rows " : " range ");
+        if (buf.length() > i) {
+          buf.append(' ');
+        }
+        buf.append(isRows ? "rows " : "range ");
         buf.append("between ");
         buf.append(lowerBound);
         buf.append(" and ");
         buf.append(upperBound);
       }
       if (!aggCalls.isEmpty()) {
-        buf.append(buf.length() == i ? "aggs " : " aggs ");
+        if (buf.length() > i) {
+          buf.append(' ');
+        }
+        buf.append("aggs ");
         buf.append(aggCalls);
       }
       buf.append(")");
@@ -333,6 +341,7 @@ public abstract class Window extends SingleRel implements Hintable {
      * Returns if the window is guaranteed to have rows.
      * This is useful to refine data type of window aggregates.
      * For instance sum(non-nullable) over (empty window) is NULL.
+     *
      * @return true when the window is non-empty
      * @see org.apache.calcite.sql.SqlWindow#isAlwaysNonEmpty()
      * @see org.apache.calcite.sql.SqlOperatorBinding#getGroupCount()
@@ -361,7 +370,8 @@ public abstract class Window extends SingleRel implements Hintable {
           final RexWinAggCall aggCall = aggCalls.get(index);
           final SqlAggFunction op = (SqlAggFunction) aggCall.getOperator();
           return AggregateCall.create(op, aggCall.distinct, false,
-              aggCall.ignoreNulls, getProjectOrdinals(aggCall.getOperands()),
+              aggCall.ignoreNulls, ImmutableList.of(),
+              getProjectOrdinals(aggCall.getOperands()),
               -1, null, RelCollations.EMPTY,
               aggCall.getType(), fieldNames.get(aggCall.ordinal));
         }

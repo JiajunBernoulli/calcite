@@ -15,10 +15,13 @@
  * limitations under the License.
  */
 package org.apache.calcite.test;
-
+import org.apache.calcite.adapter.enumerable.EnumerableConvention;
+import org.apache.calcite.adapter.enumerable.EnumerableLimit;
 import org.apache.calcite.adapter.enumerable.EnumerableMergeJoin;
+import org.apache.calcite.adapter.enumerable.EnumerableRules;
 import org.apache.calcite.config.CalciteSystemProperty;
 import org.apache.calcite.linq4j.tree.Types;
+import org.apache.calcite.plan.ConventionTraitDef;
 import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelOptPredicateList;
@@ -27,6 +30,7 @@ import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.plan.hep.HepPlanner;
 import org.apache.calcite.plan.hep.HepProgram;
 import org.apache.calcite.plan.hep.HepProgramBuilder;
+import org.apache.calcite.plan.volcano.VolcanoPlanner;
 import org.apache.calcite.rel.RelCollation;
 import org.apache.calcite.rel.RelCollationTraitDef;
 import org.apache.calcite.rel.RelCollations;
@@ -88,15 +92,15 @@ import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexTableInputRef;
 import org.apache.calcite.rex.RexTableInputRef.RelTableRef;
 import org.apache.calcite.rex.RexUtil;
+import org.apache.calcite.sql.SqlBasicFunction;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlOperator;
-import org.apache.calcite.sql.SqlSpecialOperator;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.test.SqlTestFactory;
+import org.apache.calcite.sql.type.OperandTypes;
 import org.apache.calcite.sql.type.ReturnTypes;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.test.catalog.MockCatalogReaderSimple;
-import org.apache.calcite.tools.FrameworkConfig;
 import org.apache.calcite.tools.Frameworks;
 import org.apache.calcite.tools.RelBuilder;
 import org.apache.calcite.util.Holder;
@@ -123,8 +127,11 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
+
+import static com.google.common.collect.ImmutableList.toImmutableList;
 
 import static org.apache.calcite.test.Matchers.hasFieldNames;
 import static org.apache.calcite.test.Matchers.isAlmost;
@@ -141,6 +148,9 @@ import static org.hamcrest.CoreMatchers.notNullValue;
 import static org.hamcrest.CoreMatchers.nullValue;
 import static org.hamcrest.CoreMatchers.startsWith;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.hasToString;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -349,6 +359,16 @@ public class RelMetadataTest {
         .assertColumnOriginSingle("DEPT", "NAME", true);
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5944">[CALCITE-5944]
+   * Add metadata for Sample</a>. */
+  @Test void testColumnOriginsSample() {
+    final String sql = "select productid from products_temporal\n"
+        + "tablesample bernoulli(50) repeatable(1)";
+    sql(sql)
+        .assertColumnOriginSingle("PRODUCTS_TEMPORAL", "PRODUCTID", false);
+  }
+
   @Test void testColumnOriginsSnapshot() {
     final String sql = "select productid from products_temporal\n"
         + "for system_time as of TIMESTAMP '2011-01-02 00:00:00'";
@@ -411,7 +431,7 @@ public class RelMetadataTest {
         new RelMetadataQuery(metadataConfig.getDefaultHandlerProvider());
     Set<RelColumnOrigin> origins = mq.getColumnOrigins(optimizedRel, 1);
     assertThat(origins, notNullValue());
-    assertThat(origins.size(), equalTo(1));
+    assertThat(origins, hasSize(1));
 
     RelColumnOrigin columnOrigin = origins.iterator().next();
     assertThat(columnOrigin.getOriginColumnOrdinal(), equalTo(5));
@@ -644,6 +664,39 @@ public class RelMetadataTest {
     fixture.assertThatRowCount(is(9D), is(0D), is(10d));
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5286">[CALCITE-5286]
+   * Join with parameterized LIMIT throws AssertionError "not a literal". </a>. */
+  @Test void testRowCountJoinWithDynamicParameters() {
+    final String sql = "select r.ename, s.sal from\n"
+        + "(select * from emp limit ?) r join bonus s\n"
+        + "on r.ename=s.ename where r.sal+1=s.sal";
+    sql(sql)
+        .withCluster(cluster -> {
+          RelOptPlanner planner = new VolcanoPlanner();
+          planner.addRule(EnumerableRules.ENUMERABLE_TABLE_SCAN_RULE);
+          planner.addRule(EnumerableRules.ENUMERABLE_PROJECT_RULE);
+          planner.addRule(EnumerableRules.ENUMERABLE_FILTER_RULE);
+          planner.addRule(EnumerableRules.ENUMERABLE_JOIN_RULE);
+          planner.addRule(EnumerableRules.ENUMERABLE_LIMIT_SORT_RULE);
+          planner.addRelTraitDef(ConventionTraitDef.INSTANCE);
+          return RelOptCluster.create(planner, cluster.getRexBuilder());
+        })
+        .withRelTransform(rel -> {
+          RelOptPlanner planner = rel.getCluster().getPlanner();
+          planner.setRoot(rel);
+          RelTraitSet requiredOutputTraits =
+              rel.getCluster().traitSet().replace(EnumerableConvention.INSTANCE);
+          final RelNode rootRel2 = planner.changeTraits(rel, requiredOutputTraits);
+
+          planner.setRoot(rootRel2);
+          final RelOptPlanner planner2 = planner.chooseDelegate();
+          final RelNode rootRel3 = planner2.findBestExp();
+          return rootRel3;
+        })
+        .assertThatRowCount(is(1.0), is(0D), is(Double.POSITIVE_INFINITY));
+  }
+
   @Test void testRowCountSortLimitOffsetDynamic() {
     sql("select * from emp order by ename limit ? offset ?")
         .assertThatRowCount(is(EMP_SIZE), is(0D), is(Double.POSITIVE_INFINITY));
@@ -657,6 +710,16 @@ public class RelMetadataTest {
     final String sql = "select * from (select * from emp limit 12)\n"
         + "order by ename limit 20 offset 5";
     sql(sql).assertThatRowCount(is(7d), is(0D), is(7d));
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5944">[CALCITE-5944]
+   * Add metadata for Sample</a>. */
+  @Test void testRowCountSample() {
+    sql("select * from emp tablesample bernoulli(50) repeatable(1)")
+        .assertThatRowCount(is(EMP_SIZE * 0.5), is(0D), is(Double.POSITIVE_INFINITY));
+    sql("select * from emp tablesample system(20)")
+        .assertThatRowCount(is(EMP_SIZE * 0.2), is(0D), is(Double.POSITIVE_INFINITY));
   }
 
   @Test void testRowCountAggregate() {
@@ -969,6 +1032,14 @@ public class RelMetadataTest {
         .assertThatUniqueKeysAre(bitSetOf());
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5162">[CALCITE-5162]
+   * RelMdUniqueKeys can return more precise unique keys for Aggregate</a>. */
+  @Test void testGroupByPreciseUniqueKeys() {
+    sql("select empno, ename from emp group by empno, ename")
+        .assertThatUniqueKeysAre(bitSetOf(0));
+  }
+
   @Test void testFullOuterJoinUniqueness1() {
     final String sql = "select e.empno, d.deptno\n"
         + "from (select cast(null as int) empno from sales.emp "
@@ -1102,18 +1173,36 @@ public class RelMetadataTest {
               .build();
           final Holder<@Nullable RexCorrelVariable> v = Holder.empty();
           final RelNode rel1 = b.scan("EMP")
-              .variable(v)
+              .variable(v::set)
               .project(b.field("DEPTNO"), b.field("SAL"))
               .filter(
                   b.equals(b.field(0), b.field(v.get(), "DEPTNO")))
               .build();
           return b.push(rel0)
-              .variable(v)
+              .variable(v::set)
               .push(rel1)
               .correlate(JoinRelType.SEMI, v.get().id, b.field(2, 0, "DEPTNO"))
               .build();
         })
         .assertThatAreColumnsUnique(bitSetOf(0), is(true));
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5149">[CALCITE-5149]
+   * Refine RelMdColumnUniqueness for Aggregate by considering intersect keys
+   * between target keys and group keys</a>. */
+  @Test void testColumnUniquenessForAggregate() {
+    sql("select empno, ename, count(1) as cnt from emp group by empno, ename")
+        .assertThatAreColumnsUnique(bitSetOf(0, 1), is(true));
+
+    sql("select empno, ename, count(1) as cnt from emp group by empno, ename")
+        .assertThatAreColumnsUnique(bitSetOf(0), is(true));
+
+    sql("select ename, empno, count(1) as cnt from emp group by ename, empno")
+        .assertThatAreColumnsUnique(bitSetOf(1), is(true));
+
+    sql("select empno, ename, count(1) as cnt from emp group by empno, ename")
+        .assertThatAreColumnsUnique(bitSetOf(2), is(false));
   }
 
   @Test void testGroupBy() {
@@ -1398,10 +1487,10 @@ public class RelMetadataTest {
     assertThat(colType(mq, input, 0), equalTo("DEPTNO-agg"));
 
     // There is no caching. Another request causes another call to the provider.
-    assertThat(buf.toString(), equalTo("[DEPTNO-rel, EXPR$1-rel, DEPTNO-agg]"));
-    assertThat(buf.size(), equalTo(3));
+    assertThat(buf, hasToString("[DEPTNO-rel, EXPR$1-rel, DEPTNO-agg]"));
+    assertThat(buf, hasSize(3));
     assertThat(colType(mq, input, 0), equalTo("DEPTNO-agg"));
-    assertThat(buf.size(), equalTo(4));
+    assertThat(buf, hasSize(4));
 
     // Now add a cache. Only the first request for each piece of metadata
     // generates a new call to the provider.
@@ -1411,24 +1500,24 @@ public class RelMetadataTest {
             requireNonNull(cluster.getMetadataProvider(),
                 "cluster.metadataProvider"), planner));
     assertThat(colType(mq, input, 0), equalTo("DEPTNO-agg"));
-    assertThat(buf.size(), equalTo(5));
+    assertThat(buf, hasSize(5));
     assertThat(colType(mq, input, 0), equalTo("DEPTNO-agg"));
-    assertThat(buf.size(), equalTo(5));
+    assertThat(buf, hasSize(5));
     assertThat(colType(mq, input, 1), equalTo("EXPR$1-agg"));
-    assertThat(buf.size(), equalTo(6));
+    assertThat(buf, hasSize(6));
     assertThat(colType(mq, input, 1), equalTo("EXPR$1-agg"));
-    assertThat(buf.size(), equalTo(6));
+    assertThat(buf, hasSize(6));
     assertThat(colType(mq, input, 0), equalTo("DEPTNO-agg"));
-    assertThat(buf.size(), equalTo(6));
+    assertThat(buf, hasSize(6));
 
     // With a different timestamp, a metadata item is re-computed on first call.
     long timestamp = planner.getRelMetadataTimestamp(rel);
     assertThat(timestamp, equalTo(0L));
     ((MockRelOptPlanner) planner).setRelMetadataTimestamp(timestamp + 1);
     assertThat(colType(mq, input, 0), equalTo("DEPTNO-agg"));
-    assertThat(buf.size(), equalTo(7));
+    assertThat(buf, hasSize(7));
     assertThat(colType(mq, input, 0), equalTo("DEPTNO-agg"));
-    assertThat(buf.size(), equalTo(7));
+    assertThat(buf, hasSize(7));
   }
 
   @Test void testCustomProviderWithRelMetadataQuery() {
@@ -1471,18 +1560,18 @@ public class RelMetadataTest {
     if (metadataConfig.isCaching()) {
       // The metadata query is caching, only the first request for each piece of metadata
       // generates a new call to the provider.
-      assertThat(buf.toString(), equalTo("[DEPTNO-rel, EXPR$1-rel, DEPTNO-agg]"));
-      assertThat(buf.size(), equalTo(3));
+      assertThat(buf, hasToString("[DEPTNO-rel, EXPR$1-rel, DEPTNO-agg]"));
+      assertThat(buf, hasSize(3));
       assertThat(colType(mq, input, 0), equalTo("DEPTNO-agg"));
-      assertThat(buf.size(), equalTo(3));
+      assertThat(buf, hasSize(3));
       assertThat(colType(mq, input, 0), equalTo("DEPTNO-agg"));
-      assertThat(buf.size(), equalTo(3));
+      assertThat(buf, hasSize(3));
       assertThat(colType(mq, input, 1), equalTo("EXPR$1-agg"));
-      assertThat(buf.size(), equalTo(4));
+      assertThat(buf, hasSize(4));
       assertThat(colType(mq, input, 1), equalTo("EXPR$1-agg"));
-      assertThat(buf.size(), equalTo(4));
+      assertThat(buf, hasSize(4));
       assertThat(colType(mq, input, 0), equalTo("DEPTNO-agg"));
-      assertThat(buf.size(), equalTo(4));
+      assertThat(buf, hasSize(4));
     }
 
     // Invalidate the metadata query triggers clearing of all the metadata.
@@ -1491,14 +1580,48 @@ public class RelMetadataTest {
     final MyRelMetadataQuery mq1 = (MyRelMetadataQuery) rel.getCluster().getMetadataQuery();
     assertThat(colType(mq1, input, 0), equalTo("DEPTNO-agg"));
     if (metadataConfig.isCaching()) {
-      assertThat(buf.size(), equalTo(5));
+      assertThat(buf, hasSize(5));
     }
     assertThat(colType(mq1, input, 0), equalTo("DEPTNO-agg"));
     if (metadataConfig.isCaching()) {
-      assertThat(buf.size(), equalTo(5));
+      assertThat(buf, hasSize(5));
     }
     // Resets the RelMetadataQuery to default.
     metadataConfig.applyMetadata(rel.getCluster());
+  }
+
+  /**
+   * Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5903">[CALCITE-5903]
+   * RelMdCollation does not define collations for EnumerableLimit</a>.
+   */
+  @Test void testCollationEnumerableLimit() {
+    final RelNode result = sql("select * from emp order by empno limit 10")
+        .withCluster(cluster -> {
+          final RelOptPlanner planner = new VolcanoPlanner();
+          planner.addRule(CoreRules.PROJECT_TO_CALC);
+          planner.addRule(EnumerableRules.ENUMERABLE_TABLE_SCAN_RULE);
+          planner.addRule(EnumerableRules.ENUMERABLE_CALC_RULE);
+          planner.addRule(EnumerableRules.ENUMERABLE_SORT_RULE);
+          planner.addRule(EnumerableRules.ENUMERABLE_LIMIT_RULE);
+          planner.addRelTraitDef(ConventionTraitDef.INSTANCE);
+          return RelOptCluster.create(planner, cluster.getRexBuilder());
+        })
+        .withRelTransform(rel -> {
+          final RelOptPlanner planner = rel.getCluster().getPlanner();
+          planner.setRoot(rel);
+          final RelTraitSet requiredOutputTraits =
+              rel.getCluster().traitSet().replace(EnumerableConvention.INSTANCE);
+          final RelNode rootRel = planner.changeTraits(rel, requiredOutputTraits);
+          planner.setRoot(rootRel);
+          return planner.findBestExp();
+        }).toRel();
+
+    assertThat(result, instanceOf(EnumerableLimit.class));
+    final RelMetadataQuery mq = result.getCluster().getMetadataQuery();
+    final ImmutableList<RelCollation> collations = mq.collations(result);
+    assertThat(collations, notNullValue());
+    assertEquals("[[0]]", collations.toString());
   }
 
   /** Unit test for
@@ -1526,14 +1649,14 @@ public class RelMetadataTest {
 
     List<RelCollation> collations =
         RelMdCollation.table(empScan.getTable());
-    assertThat(collations.size(), equalTo(0));
+    assertThat(collations, hasSize(0));
 
     // ORDER BY field#0 ASC, field#1 ASC
     final RelCollation collation =
         RelCollations.of(new RelFieldCollation(0), new RelFieldCollation(1));
     collations = RelMdCollation.sort(collation);
-    assertThat(collations.size(), equalTo(1));
-    assertThat(collations.get(0).getFieldCollations().size(), equalTo(2));
+    assertThat(collations, hasSize(1));
+    assertThat(collations.get(0).getFieldCollations(), hasSize(2));
 
     final Sort empSort = LogicalSort.create(empScan, collation, null, null);
 
@@ -1547,17 +1670,18 @@ public class RelMetadataTest {
 
     final RelMetadataQuery mq = cluster.getMetadataQuery();
     collations = RelMdCollation.project(mq, empSort, projects);
-    assertThat(collations.size(), equalTo(1));
-    assertThat(collations.get(0).getFieldCollations().size(), equalTo(2));
+    assertThat(collations, hasSize(1));
+    assertThat(collations.get(0).getFieldCollations(), hasSize(2));
     assertThat(collations.get(0).getFieldCollations().get(0).getFieldIndex(),
         equalTo(2));
     assertThat(collations.get(0).getFieldCollations().get(1).getFieldIndex(),
         equalTo(0));
 
-    final LogicalProject project = LogicalProject.create(empSort,
-        ImmutableList.of(),
-        projects,
-        ImmutableList.of("a", "b", "c", "d"));
+    final LogicalProject project =
+        LogicalProject.create(empSort, ImmutableList.of(),
+            projects,
+            ImmutableList.of("a", "b", "c", "d"),
+            ImmutableSet.of());
 
     final LogicalTableScan deptScan =
         LogicalTableScan.create(cluster, deptTable, ImmutableList.of());
@@ -1569,9 +1693,9 @@ public class RelMetadataTest {
 
     final ImmutableIntList leftKeys = ImmutableIntList.of(2);
     final ImmutableIntList rightKeys = ImmutableIntList.of(0);
-    final EnumerableMergeJoin join;
-    join = EnumerableMergeJoin.create(project, deptSort,
-        rexBuilder.makeLiteral(true), leftKeys, rightKeys, JoinRelType.INNER);
+    final EnumerableMergeJoin join =
+        EnumerableMergeJoin.create(project, deptSort,
+            rexBuilder.makeLiteral(true), leftKeys, rightKeys, JoinRelType.INNER);
     collations =
         RelMdCollation.mergeJoin(mq, project, deptSort, leftKeys,
             rightKeys, JoinRelType.INNER);
@@ -1597,10 +1721,10 @@ public class RelMetadataTest {
         equalTo(antiJoin.getTraitSet().getTraits(RelCollationTraitDef.INSTANCE)));
 
     // Values (empty)
-    collations = RelMdCollation.values(mq, empTable.getRowType(),
-        ImmutableList.of());
-    assertThat(collations.toString(),
-        equalTo("[[0, 1, 2, 3, 4, 5, 6, 7, 8], "
+    collations =
+        RelMdCollation.values(mq, empTable.getRowType(), ImmutableList.of());
+    assertThat(collations,
+        hasToString("[[0, 1, 2, 3, 4, 5, 6, 7, 8], "
             + "[1, 2, 3, 4, 5, 6, 7, 8], "
             + "[2, 3, 4, 5, 6, 7, 8], "
             + "[3, 4, 5, 6, 7, 8], "
@@ -1631,8 +1755,8 @@ public class RelMetadataTest {
     addRow(tuples, rexBuilder, 2, 3, 2, 2);
     addRow(tuples, rexBuilder, 3, 3, 1, 4);
     collations = RelMdCollation.values(mq, rowType, tuples.build());
-    assertThat(collations.toString(),
-        equalTo("[[0, 1, 2, 3], [1, 3]]"));
+    assertThat(collations,
+        hasToString("[[0, 1, 2, 3], [1, 3]]"));
 
     final LogicalValues values =
         LogicalValues.create(cluster, rowType, tuples.build());
@@ -1697,8 +1821,8 @@ public class RelMetadataTest {
       if (value == null) {
         literal = rexBuilder.makeNullLiteral(varcharType);
       } else if (value instanceof Integer) {
-        literal = rexBuilder.makeExactLiteral(
-            BigDecimal.valueOf((Integer) value));
+        literal =
+            rexBuilder.makeExactLiteral(BigDecimal.valueOf((Integer) value));
       } else {
         literal = rexBuilder.makeLiteral((String) value);
       }
@@ -1774,7 +1898,7 @@ public class RelMetadataTest {
             true);
     rowSize = mq.getAverageRowSize(union);
     columnSizes = mq.getAverageColumnSizes(union);
-    assertThat(columnSizes.size(), equalTo(9));
+    assertThat(columnSizes, hasSize(9));
     assertThat(columnSizes,
         equalTo(Arrays.asList(4.0, 40.0, 20.0, 4.0, 8.0, 4.0, 4.0, 4.0, 1.0)));
     assertThat(rowSize, equalTo(89.0));
@@ -1789,7 +1913,7 @@ public class RelMetadataTest {
                 rexBuilder.makeExactLiteral(BigDecimal.TEN)));
     rowSize = mq.getAverageRowSize(filter);
     columnSizes = mq.getAverageColumnSizes(filter);
-    assertThat(columnSizes.size(), equalTo(2));
+    assertThat(columnSizes, hasSize(2));
     assertThat(columnSizes, equalTo(Arrays.asList(4.0, 20.0)));
     assertThat(rowSize, equalTo(24.0));
 
@@ -1805,10 +1929,11 @@ public class RelMetadataTest {
                     rexBuilder.makeExactLiteral(BigDecimal.ONE)),
                 rexBuilder.makeCall(SqlStdOperatorTable.CHAR_LENGTH,
                     rexBuilder.makeInputRef(filter, 1))),
-            (List<String>) null);
+            (List<String>) null,
+            ImmutableSet.of());
     rowSize = mq.getAverageRowSize(deptProject);
     columnSizes = mq.getAverageColumnSizes(deptProject);
-    assertThat(columnSizes.size(), equalTo(4));
+    assertThat(columnSizes, hasSize(4));
     assertThat(columnSizes, equalTo(Arrays.asList(4.0, 20.0, 4.0, 4.0)));
     assertThat(rowSize, equalTo(32.0));
 
@@ -1818,7 +1943,7 @@ public class RelMetadataTest {
             rexBuilder.makeLiteral(true), ImmutableSet.of(), JoinRelType.INNER);
     rowSize = mq.getAverageRowSize(join);
     columnSizes = mq.getAverageColumnSizes(join);
-    assertThat(columnSizes.size(), equalTo(13));
+    assertThat(columnSizes, hasSize(13));
     assertThat(columnSizes,
         equalTo(
             Arrays.asList(4.0, 40.0, 20.0, 4.0, 8.0, 4.0, 4.0, 4.0, 1.0, 4.0,
@@ -1832,12 +1957,12 @@ public class RelMetadataTest {
             bitSetOf(2, 0),
             ImmutableList.of(),
             ImmutableList.of(
-                AggregateCall.create(SqlStdOperatorTable.COUNT,
-                    false, false, false, ImmutableIntList.of(),
+                AggregateCall.create(SqlStdOperatorTable.COUNT, false, false,
+                    false, ImmutableList.of(), ImmutableIntList.of(),
                     -1, null, RelCollations.EMPTY, 2, join, null, null)));
     rowSize = mq.getAverageRowSize(aggregate);
     columnSizes = mq.getAverageColumnSizes(aggregate);
-    assertThat(columnSizes.size(), equalTo(3));
+    assertThat(columnSizes, hasSize(3));
     assertThat(columnSizes, equalTo(Arrays.asList(4.0, 20.0, 8.0)));
     assertThat(rowSize, equalTo(32.0));
 
@@ -1869,8 +1994,8 @@ public class RelMetadataTest {
     final RelBuilder relBuilder = RelBuilder.proto().create(cluster, null);
     final RelMetadataQuery mq = cluster.getMetadataQuery();
 
-    final LogicalTableScan empScan = LogicalTableScan.create(cluster, empTable,
-        ImmutableList.of());
+    final LogicalTableScan empScan =
+        LogicalTableScan.create(cluster, empTable, ImmutableList.of());
     relBuilder.push(empScan);
 
     RelOptPredicateList predicates =
@@ -2013,7 +2138,7 @@ public class RelMetadataTest {
       final RelNode rel = sql(sql).toRel();
       final RelMetadataQuery mq = rel.getCluster().getMetadataQuery();
       RelOptPredicateList inputSet = mq.getPulledUpPredicates(rel.getInput(0));
-      assertThat(inputSet.pulledUpPredicates.size(), is(11));
+      assertThat(inputSet.pulledUpPredicates, hasSize(11));
     }
   }
 
@@ -2129,6 +2254,19 @@ public class RelMetadataTest {
         sortsAs("[=($0, 1), =($1, 2)]"));
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5944">[CALCITE-5944]
+   * Add metadata for Sample</a>. */
+  @Test void testPullUpPredicatesFromSample() {
+    final RelNode rel = sql("select * from("
+        + "select empno, deptno, comm from emp\n"
+        + "where empno=1 and deptno=2)\n"
+        + "tablesample bernoulli(50) repeatable(1)").toRel();
+    final RelMetadataQuery mq = rel.getCluster().getMetadataQuery();
+    assertThat(mq.getPulledUpPredicates(rel).pulledUpPredicates,
+        sortsAs("[=($0, 1), =($1, 2)]"));
+  }
+
   @Test void testDistributionSimple() {
     RelNode rel = sql("select * from emp where deptno = 10").toRel();
     final RelMetadataQuery mq = rel.getCluster().getMetadataQuery();
@@ -2193,6 +2331,27 @@ public class RelMetadataTest {
         String.valueOf(r), is(expected));
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5944">[CALCITE-5944]
+   * Add metadata for Sample</a>. */
+  @Test void testExpressionLineageSample() {
+    final String sql = "select productid from products_temporal\n"
+        + "tablesample bernoulli(50) repeatable(1)";
+    final String expected = "[[CATALOG, SALES, PRODUCTS_TEMPORAL].#0.$0]";
+    final String comment = "'productid' is column 0 in 'catalog.sales.products_temporal'";
+    assertExpressionLineage(sql, 0, expected, comment);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5392">[CALCITE-5392]
+   * Support Snapshot in RelMdExpressionLineage</a>. */
+  @Test void testExpressionLineageSnapshot() {
+    String expected = "[[CATALOG, SALES, PRODUCTS_TEMPORAL].#0.$0]";
+    String comment = "'productid' is column 0 in 'catalog.sales.products_temporal'";
+    assertExpressionLineage("select productid from products_temporal\n"
+        + "for system_time as of TIMESTAMP '2011-01-02 00:00:00'", 0, expected, comment);
+  }
+
   @Test void testExpressionLineageStar() {
     // All columns in output
     final RelNode tableRel = sql("select * from emp").toRel();
@@ -2202,7 +2361,7 @@ public class RelMetadataTest {
     final Set<RexNode> r = mq.getExpressionLineage(tableRel, ref);
     final String inputRef =
         RexInputRef.of(4, tableRel.getRowType().getFieldList()).toString();
-    assertThat(r.size(), is(1));
+    assertThat(r, hasSize(1));
     final String resultString = r.iterator().next().toString();
     assertThat(resultString, startsWith(EMP_QNAME.toString()));
     assertThat(resultString, endsWith(inputRef));
@@ -2216,14 +2375,14 @@ public class RelMetadataTest {
 
     final RexNode ref1 = RexInputRef.of(0, rel.getRowType().getFieldList());
     final Set<RexNode> r1 = mq.getExpressionLineage(rel, ref1);
-    assertThat(r1.size(), is(1));
+    assertThat(r1, hasSize(1));
     final RexTableInputRef result1 = (RexTableInputRef) r1.iterator().next();
     assertThat(result1.getQualifiedName(), is(EMP_QNAME));
     assertThat(result1.getIndex(), is(3));
 
     final RexNode ref2 = RexInputRef.of(1, rel.getRowType().getFieldList());
     final Set<RexNode> r2 = mq.getExpressionLineage(rel, ref2);
-    assertThat(r2.size(), is(1));
+    assertThat(r2, hasSize(1));
     final RexTableInputRef result2 = (RexTableInputRef) r2.iterator().next();
     assertThat(result2.getQualifiedName(), is(EMP_QNAME));
     assertThat(result2.getIndex(), is(7));
@@ -2239,14 +2398,14 @@ public class RelMetadataTest {
 
     final RexNode ref1 = RexInputRef.of(0, rel.getRowType().getFieldList());
     final Set<RexNode> r1 = mq.getExpressionLineage(rel, ref1);
-    assertThat(r1.size(), is(1));
+    assertThat(r1, hasSize(1));
     final RexTableInputRef result1 = (RexTableInputRef) r1.iterator().next();
     assertThat(result1.getQualifiedName(), is(EMP_QNAME));
     assertThat(result1.getIndex(), is(7));
 
     final RexNode ref2 = RexInputRef.of(1, rel.getRowType().getFieldList());
     final Set<RexNode> r2 = mq.getExpressionLineage(rel, ref2);
-    assertThat(r2.size(), is(1));
+    assertThat(r2, hasSize(1));
     final RexTableInputRef result2 = (RexTableInputRef) r2.iterator().next();
     assertThat(result2.getQualifiedName(), is(EMP_QNAME));
     assertThat(result2.getIndex(), is(3));
@@ -2263,11 +2422,11 @@ public class RelMetadataTest {
     final RexNode ref = RexInputRef.of(0, rel.getRowType().getFieldList());
     final Set<RexNode> r = mq.getExpressionLineage(rel, ref);
 
-    assertThat(r.size(), is(1));
+    assertThat(r, hasSize(1));
     final RexNode result = r.iterator().next();
     assertThat(result.getKind(), is(SqlKind.PLUS));
     final RexCall call = (RexCall) result;
-    assertThat(call.getOperands().size(), is(2));
+    assertThat(call.getOperands(), hasSize(2));
     final RexTableInputRef inputRef1 =
         (RexTableInputRef) call.getOperands().get(0);
     assertThat(inputRef1.getQualifiedName(), is(EMP_QNAME));
@@ -2311,7 +2470,7 @@ public class RelMetadataTest {
 
     final RexNode ref = RexInputRef.of(0, rel.getRowType().getFieldList());
     final Set<RexNode> r = mq.getExpressionLineage(rel, ref);
-    assertThat(r.size(), is(1));
+    assertThat(r, hasSize(1));
     final RexTableInputRef result = (RexTableInputRef) r.iterator().next();
     assertThat(result.getQualifiedName(), is(EMP_QNAME));
     assertThat(result.getIndex(), is(1));
@@ -2325,7 +2484,7 @@ public class RelMetadataTest {
 
     final RexNode ref = RexInputRef.of(0, rel.getRowType().getFieldList());
     final Set<RexNode> r = mq.getExpressionLineage(rel, ref);
-    assertThat(r.size(), is(1));
+    assertThat(r, hasSize(1));
     final RexTableInputRef result = (RexTableInputRef) r.iterator().next();
     assertThat(result.getQualifiedName(),
         equalTo(ImmutableList.of("CATALOG", "SALES", "BONUS")));
@@ -2340,7 +2499,7 @@ public class RelMetadataTest {
 
     final RexNode ref = RexInputRef.of(0, rel.getRowType().getFieldList());
     final Set<RexNode> r = mq.getExpressionLineage(rel, ref);
-    assertThat(r.size(), is(1));
+    assertThat(r, hasSize(1));
     final RexTableInputRef result = (RexTableInputRef) r.iterator().next();
     assertThat(result.getQualifiedName(), is(EMP_QNAME));
     assertThat(result.getIndex(), is(1));
@@ -2355,7 +2514,7 @@ public class RelMetadataTest {
 
     final RexNode ref = RexInputRef.of(0, rel.getRowType().getFieldList());
     final Set<RexNode> r = mq.getExpressionLineage(rel, ref);
-    assertThat(r.size(), is(1));
+    assertThat(r, hasSize(1));
     final RexTableInputRef result = (RexTableInputRef) r.iterator().next();
     assertThat(result.getQualifiedName(),
         equalTo(ImmutableList.of("CATALOG", "SALES", "BONUS")));
@@ -2376,7 +2535,7 @@ public class RelMetadataTest {
     final Set<RexNode> r1 = mq.getExpressionLineage(rel, ref1);
     final String inputRef1 =
         RexInputRef.of(7, tableRel.getRowType().getFieldList()).toString();
-    assertThat(r1.size(), is(1));
+    assertThat(r1, hasSize(1));
     final String resultString1 = r1.iterator().next().toString();
     assertThat(resultString1, startsWith(EMP_QNAME.toString()));
     assertThat(resultString1, endsWith(inputRef1));
@@ -2385,7 +2544,7 @@ public class RelMetadataTest {
     final Set<RexNode> r2 = mq.getExpressionLineage(rel, ref2);
     final String inputRef2 =
         RexInputRef.of(5, tableRel.getRowType().getFieldList()).toString();
-    assertThat(r2.size(), is(1));
+    assertThat(r2, hasSize(1));
     final String resultString2 = r2.iterator().next().toString();
     assertThat(resultString2, startsWith(EMP_QNAME.toString()));
     assertThat(resultString2, endsWith(inputRef2));
@@ -2415,7 +2574,7 @@ public class RelMetadataTest {
     final Set<RexNode> r = mq.getExpressionLineage(rel, ref);
     final String inputRef =
         RexInputRef.of(1, tableRel.getRowType().getFieldList()).toString();
-    assertThat(r.size(), is(1));
+    assertThat(r, hasSize(1));
     final String resultString = r.iterator().next().toString();
     assertThat(resultString, startsWith(EMP_QNAME.toString()));
     assertThat(resultString, endsWith(inputRef));
@@ -2432,7 +2591,7 @@ public class RelMetadataTest {
     final Set<RexNode> r = mq.getExpressionLineage(rel, ref);
     final String inputRef =
         RexInputRef.of(7, tableRel.getRowType().getFieldList()).toString();
-    assertThat(r.size(), is(1));
+    assertThat(r, hasSize(1));
     final String resultString = r.iterator().next().toString();
     assertThat(resultString, startsWith(EMP_QNAME.toString()));
     assertThat(resultString, endsWith(inputRef));
@@ -2462,7 +2621,7 @@ public class RelMetadataTest {
     final Set<RexNode> r = mq.getExpressionLineage(rel, ref);
     final String inputRef =
         RexInputRef.of(5, tableRel.getRowType().getFieldList()).toString();
-    assertThat(r.size(), is(2));
+    assertThat(r, hasSize(2));
     for (RexNode result : r) {
       final String resultString = result.toString();
       assertThat(resultString, startsWith(EMP_QNAME.toString()));
@@ -2491,11 +2650,11 @@ public class RelMetadataTest {
     // The first one should be the same one: join
     // The second should come from each union input
     final Set<List<String>> set = new HashSet<>();
-    assertThat(r.size(), is(2));
+    assertThat(r, hasSize(2));
     for (RexNode result : r) {
       assertThat(result.getKind(), is(SqlKind.PLUS));
       final RexCall call = (RexCall) result;
-      assertThat(call.getOperands().size(), is(2));
+      assertThat(call.getOperands(), hasSize(2));
       final RexTableInputRef inputRef1 =
           (RexTableInputRef) call.getOperands().get(0);
       assertThat(inputRef1.getQualifiedName(), is(EMP_QNAME));
@@ -2508,7 +2667,7 @@ public class RelMetadataTest {
       assertThat(inputRef2.getIndex(), is(5));
       assertThat(inputRef1.getIdentifier(), not(inputRef2.getIdentifier()));
     }
-    assertThat(set.size(), is(1));
+    assertThat(set, hasSize(1));
   }
 
   @Test void testExpressionLineageValues() {
@@ -2538,7 +2697,7 @@ public class RelMetadataTest {
         RexInputRef.of(0, optimizedRel.getRowType().getFieldList());
     final Set<RexNode> r = mq.getExpressionLineage(optimizedRel, ref);
 
-    assertThat(r.size(), is(1));
+    assertThat(r, hasSize(1));
     final String resultString = r.iterator().next().toString();
     assertThat(resultString, is("+([CATALOG, SALES, EMP].#0.$5, 1)"));
   }
@@ -2573,9 +2732,9 @@ public class RelMetadataTest {
 
     final RelNode filter = relBuilder.peek();
     predicates = mq.getAllPredicates(filter);
-    assertThat(predicates.pulledUpPredicates.size(), is(1));
+    assertThat(predicates.pulledUpPredicates, hasSize(1));
     RexCall call = (RexCall) predicates.pulledUpPredicates.get(0);
-    assertThat(call.getOperands().size(), is(2));
+    assertThat(call.getOperands(), hasSize(2));
     RexTableInputRef inputRef1 = (RexTableInputRef) call.getOperands().get(0);
     assertThat(inputRef1.getQualifiedName(), is(EMP_QNAME));
     assertThat(inputRef1.getIndex(), is(0));
@@ -2591,16 +2750,16 @@ public class RelMetadataTest {
     relBuilder.project(relBuilder.field("DEPTNO"));
     final RelNode project = relBuilder.peek();
     predicates = mq.getAllPredicates(project);
-    assertThat(predicates.pulledUpPredicates.size(), is(2));
+    assertThat(predicates.pulledUpPredicates, hasSize(2));
     // From Filter
     call = (RexCall) predicates.pulledUpPredicates.get(0);
-    assertThat(call.getOperands().size(), is(2));
+    assertThat(call.getOperands(), hasSize(2));
     inputRef1 = (RexTableInputRef) call.getOperands().get(0);
     assertThat(inputRef1.getQualifiedName(), is(EMP_QNAME));
     assertThat(inputRef1.getIndex(), is(0));
     // From Join
     call = (RexCall) predicates.pulledUpPredicates.get(1);
-    assertThat(call.getOperands().size(), is(2));
+    assertThat(call.getOperands(), hasSize(2));
     inputRef1 = (RexTableInputRef) call.getOperands().get(0);
     assertThat(inputRef1.getQualifiedName(), is(EMP_QNAME));
     assertThat(inputRef1.getIndex(), is(7));
@@ -2618,15 +2777,15 @@ public class RelMetadataTest {
     final RelMetadataQuery mq = rel.getCluster().getMetadataQuery();
     RelOptPredicateList inputSet = mq.getAllPredicates(rel);
     ImmutableList<RexNode> pulledUpPredicates = inputSet.pulledUpPredicates;
-    assertThat(pulledUpPredicates.size(), is(1));
+    assertThat(pulledUpPredicates, hasSize(1));
     RexCall call = (RexCall) pulledUpPredicates.get(0);
-    assertThat(call.getOperands().size(), is(2));
+    assertThat(call.getOperands(), hasSize(2));
     final RexTableInputRef inputRef1 =
         (RexTableInputRef) call.getOperands().get(0);
     assertThat(inputRef1.getQualifiedName(), is(EMP_QNAME));
     assertThat(inputRef1.getIndex(), is(0));
     final RexLiteral constant = (RexLiteral) call.getOperands().get(1);
-    assertThat(constant.toString(), is("5"));
+    assertThat(constant, hasToString("5"));
   }
 
   @Test void testAllPredicatesAggregate2() {
@@ -2638,15 +2797,15 @@ public class RelMetadataTest {
     final RelMetadataQuery mq = rel.getCluster().getMetadataQuery();
     RelOptPredicateList inputSet = mq.getAllPredicates(rel);
     ImmutableList<RexNode> pulledUpPredicates = inputSet.pulledUpPredicates;
-    assertThat(pulledUpPredicates.size(), is(1));
+    assertThat(pulledUpPredicates, hasSize(1));
     RexCall call = (RexCall) pulledUpPredicates.get(0);
-    assertThat(call.getOperands().size(), is(2));
+    assertThat(call.getOperands(), hasSize(2));
     final RexTableInputRef inputRef1 =
         (RexTableInputRef) call.getOperands().get(0);
     assertTrue(inputRef1.getQualifiedName().equals(EMP_QNAME));
     assertThat(inputRef1.getIndex(), is(0));
     final RexLiteral constant = (RexLiteral) call.getOperands().get(1);
-    assertThat(constant.toString(), is("5"));
+    assertThat(constant, hasToString("5"));
   }
 
   @Test void testAllPredicatesAggregate3() {
@@ -2684,8 +2843,8 @@ public class RelMetadataTest {
             + "true]"));
     final Set<RelTableRef> tableReferences =
         Sets.newTreeSet(mq.getTableReferences(rel));
-    assertThat(tableReferences.toString(),
-        equalTo("[[CATALOG, SALES, DEPT].#0, [CATALOG, SALES, DEPT].#1, "
+    assertThat(tableReferences,
+        hasToString("[[CATALOG, SALES, DEPT].#0, [CATALOG, SALES, DEPT].#1, "
             + "[CATALOG, SALES, EMP].#0, [CATALOG, SALES, EMP].#1, "
             + "[CATALOG, SALES, EMP].#2, [CATALOG, SALES, EMP].#3]"));
   }
@@ -2706,8 +2865,8 @@ public class RelMetadataTest {
         sortsAs("[>([CATALOG, SALES, EMP].#0.$0, 5)]"));
     final Set<RelTableRef> tableReferences =
         Sets.newTreeSet(mq.getTableReferences(rel));
-    assertThat(tableReferences.toString(),
-        equalTo("[[CATALOG, SALES, EMP].#0]"));
+    assertThat(tableReferences,
+        hasToString("[[CATALOG, SALES, EMP].#0]"));
   }
 
   @Test void testAllPredicatesAndTableUnion() {
@@ -2749,6 +2908,19 @@ public class RelMetadataTest {
     checkAllPredicatesAndTableSetOp(sql);
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5944">[CALCITE-5944]
+   * Add metadata for Sample</a>. */
+  @Test void testAllPredicatesSample() {
+    final RelNode rel = sql("select * from("
+        + "select empno, deptno, comm from emp\n"
+        + "where empno=1 and deptno=2)\n"
+        + "tablesample bernoulli(50) repeatable(1)").toRel();
+    final RelMetadataQuery mq = rel.getCluster().getMetadataQuery();
+    assertThat(mq.getAllPredicates(rel).pulledUpPredicates,
+        sortsAs("[AND(=([CATALOG, SALES, EMP].#0.$0, 1), =([CATALOG, SALES, EMP].#0.$7, 2))]"));
+  }
+
   public void checkAllPredicatesAndTableSetOp(String sql) {
     final RelNode rel = sql(sql).toRel();
     final RelMetadataQuery mq = rel.getCluster().getMetadataQuery();
@@ -2760,8 +2932,8 @@ public class RelMetadataTest {
             + "true]"));
     final Set<RelTableRef> tableReferences =
         Sets.newTreeSet(mq.getTableReferences(rel));
-    assertThat(tableReferences.toString(),
-        equalTo("[[CATALOG, SALES, DEPT].#0, [CATALOG, SALES, DEPT].#1, "
+    assertThat(tableReferences,
+        hasToString("[[CATALOG, SALES, DEPT].#0, [CATALOG, SALES, DEPT].#1, "
             + "[CATALOG, SALES, EMP].#0, [CATALOG, SALES, EMP].#1, "
             + "[CATALOG, SALES, EMP].#2, [CATALOG, SALES, EMP].#3]"));
   }
@@ -2773,16 +2945,16 @@ public class RelMetadataTest {
     final RelMetadataQuery mq1 = rel1.getCluster().getMetadataQuery();
     final Set<RelTableRef> tableReferences1 =
         Sets.newTreeSet(mq1.getTableReferences(rel1));
-    assertThat(tableReferences1.toString(),
-        equalTo("[[CATALOG, SALES, EMP].#0, [CATALOG, SALES, EMP].#1]"));
+    assertThat(tableReferences1,
+        hasToString("[[CATALOG, SALES, EMP].#0, [CATALOG, SALES, EMP].#1]"));
 
     final String sql2 = "select a.deptno from dept a intersect all select b.deptno from emp b";
     final RelNode rel2 = sql(sql2).toRel();
     final RelMetadataQuery mq2 = rel2.getCluster().getMetadataQuery();
     final Set<RelTableRef> tableReferences2 =
         Sets.newTreeSet(mq2.getTableReferences(rel2));
-    assertThat(tableReferences2.toString(),
-        equalTo("[[CATALOG, SALES, DEPT].#0, [CATALOG, SALES, EMP].#0]"));
+    assertThat(tableReferences2,
+        hasToString("[[CATALOG, SALES, DEPT].#0, [CATALOG, SALES, EMP].#0]"));
 
   }
 
@@ -2793,8 +2965,8 @@ public class RelMetadataTest {
     final RelMetadataQuery mq = rel.getCluster().getMetadataQuery();
     final Set<RelTableRef> tableReferences =
         Sets.newTreeSet(mq.getTableReferences(rel));
-    assertThat(tableReferences.toString(),
-        equalTo("[[CATALOG, SALES, EMP].#0, [CATALOG, SALES, EMP].#1]"));
+    assertThat(tableReferences,
+        hasToString("[[CATALOG, SALES, EMP].#0, [CATALOG, SALES, EMP].#1]"));
   }
 
   @Test void testAllPredicatesCrossJoinMultiTable() {
@@ -2819,8 +2991,8 @@ public class RelMetadataTest {
   @Test void testTableReferencesJoinUnknownNode() {
     final String sql = "select * from emp limit 10";
     final RelNode node = sql(sql).toRel();
-    final RelNode nodeWithUnknown = new DummyRelNode(
-        node.getCluster(), node.getTraitSet(), node);
+    final RelNode nodeWithUnknown =
+        new DummyRelNode(node.getCluster(), node.getTraitSet(), node);
     final RexBuilder rexBuilder = node.getCluster().getRexBuilder();
     // Join
     final LogicalJoin join =
@@ -2854,8 +3026,8 @@ public class RelMetadataTest {
   @Test void testTableReferencesUnionUnknownNode() {
     final String sql = "select * from emp limit 10";
     final RelNode node = sql(sql).toRel();
-    final RelNode nodeWithUnknown = new DummyRelNode(
-        node.getCluster(), node.getTraitSet(), node);
+    final RelNode nodeWithUnknown =
+        new DummyRelNode(node.getCluster(), node.getTraitSet(), node);
     // Union
     final LogicalUnion union =
         LogicalUnion.create(ImmutableList.of(nodeWithUnknown, node),
@@ -3113,7 +3285,7 @@ public class RelMetadataTest {
     assertThat(rel, instanceOf(Project.class));
 
     Project project = (Project) rel;
-    assertThat(project.getProjects().size(), is(3));
+    assertThat(project.getProjects(), hasSize(3));
 
     // a non-const column, followed by two constant columns.
     assertThat(RexUtil.isLiteral(project.getProjects().get(0), true), is(false));
@@ -3145,23 +3317,15 @@ public class RelMetadataTest {
         is(mq.getPopulationSize(rel, bitSetOf(0))));
   }
 
-  private static final SqlOperator NONDETERMINISTIC_OP = new SqlSpecialOperator(
-          "NDC",
-          SqlKind.OTHER_FUNCTION,
-          0,
-          false,
-          ReturnTypes.BOOLEAN,
-          null, null) {
-    @Override public boolean isDeterministic() {
-      return false;
-    }
-  };
+  private static final SqlOperator NONDETERMINISTIC_OP =
+      SqlBasicFunction.create("NDC", ReturnTypes.BOOLEAN, OperandTypes.VARIADIC)
+          .withDeterministic(false);
 
   /** Tests calling {@link RelMetadataQuery#getTableOrigin} for
    * an aggregate with no columns. Previously threw. */
   @Test void testEmptyAggregateTableOrigin() {
-    final FrameworkConfig config = RelBuilderTest.config().build();
-    final RelBuilder builder = RelBuilder.create(config);
+    final RelBuilder builder =
+        RelBuilderTest.createBuilder(b -> b.withPreventEmptyFieldList(false));
     RelMetadataQuery mq = builder.getCluster().getMetadataQuery();
     RelNode agg = builder
         .scan("EMP")
@@ -3172,8 +3336,7 @@ public class RelMetadataTest {
   }
 
   @Test void testGetPredicatesForJoin() {
-    final FrameworkConfig config = RelBuilderTest.config().build();
-    final RelBuilder builder = RelBuilder.create(config);
+    final RelBuilder builder = RelBuilderTest.createBuilder();
     RelNode join = builder
         .scan("EMP")
         .scan("DEPT")
@@ -3192,14 +3355,12 @@ public class RelMetadataTest {
         .build();
     assertThat(mq.getPulledUpPredicates(join1)
         .pulledUpPredicates
-        .get(0)
-        .toString(),
-        is("=($0, $8)"));
+        .get(0),
+        hasToString("=($0, $8)"));
   }
 
-  @Test void testGetPredicatesForFilter() throws Exception {
-    final FrameworkConfig config = RelBuilderTest.config().build();
-    final RelBuilder builder = RelBuilder.create(config);
+  @Test void testGetPredicatesForFilter() {
+    final RelBuilder builder = RelBuilderTest.createBuilder();
     RelNode filter = builder
         .scan("EMP")
         .filter(builder.call(NONDETERMINISTIC_OP))
@@ -3216,9 +3377,30 @@ public class RelMetadataTest {
         .build();
     assertThat(mq.getPulledUpPredicates(filter1)
             .pulledUpPredicates
-            .get(0)
-            .toString(),
-        is("=($0, $1)"));
+            .get(0),
+        hasToString("=($0, $1)"));
+  }
+
+  @Test void testGetPredicatesForLiteralAgg() {
+    final RelBuilder b = RelBuilderTest.createBuilder();
+    RelNode r = b
+        .scan("EMP")
+        .aggregate(b.groupKey("DEPTNO"),
+            b.literalAgg(42),
+            b.literalAgg(null))
+        .build();
+    RelMetadataQuery mq = r.getCluster().getMetadataQuery();
+    final RelOptPredicateList predicateList = mq.getPulledUpPredicates(r);
+    assertThat(predicateList.pulledUpPredicates,
+        hasToString("[=($1, 42), IS NULL($2)]"));
+    assertThat(toSortedStringList(predicateList.constantMap),
+        hasToString("[$1=42, $2=null:NULL]"));
+  }
+
+  /** Converts a Map to a sorted list of its entries. */
+  static <K, V> List<String> toSortedStringList(Map<K, V> map) {
+    return map.entrySet().stream().map(Object::toString)
+        .sorted().collect(toImmutableList());
   }
 
   /** Test case for
@@ -3233,6 +3415,44 @@ public class RelMetadataTest {
       checkInputForCollationAndLimit(cluster, empTable, deptTable);
       return null;
     });
+  }
+
+  /** Unit test for
+   * {@link org.apache.calcite.rel.metadata.RelMetadataQuery#getAverageColumnSizes(org.apache.calcite.rel.RelNode)}
+   * with a table that has its own implementation of {@link BuiltInMetadata.Size}. */
+  @Test void testCustomizedAverageColumnSizes() {
+    SqlTestFactory.CatalogReaderFactory factory = (typeFactory, caseSensitive) -> {
+      CompositeKeysCatalogReader catalogReader =
+          new CompositeKeysCatalogReader(typeFactory, false);
+      catalogReader.init();
+      return catalogReader;
+    };
+
+    final RelNode rel = sql("select key1, key2 from s.composite_keys_table")
+        .withCatalogReaderFactory(factory).toRel();
+    final RelMetadataQuery mq = rel.getCluster().getMetadataQuery();
+    List<Double> columnSizes = mq.getAverageColumnSizes(rel);
+    assertThat(columnSizes, hasSize(2));
+    assertThat(columnSizes.get(0), is(2.0));
+    assertThat(columnSizes.get(1), is(3.0));
+  }
+
+  /** Unit test for
+   * {@link org.apache.calcite.rel.metadata.RelMetadataQuery#getDistinctRowCount(RelNode, ImmutableBitSet, RexNode)}
+   * with a table that has its own implementation of {@link BuiltInMetadata.Size}. */
+  @Test void testCustomizedDistinctRowcount() {
+    SqlTestFactory.CatalogReaderFactory factory = (typeFactory, caseSensitive) -> {
+      CompositeKeysCatalogReader catalogReader =
+          new CompositeKeysCatalogReader(typeFactory, false);
+      catalogReader.init();
+      return catalogReader;
+    };
+
+    final RelNode rel = sql("select key1, key2 from s.composite_keys_table")
+        .withCatalogReaderFactory(factory).toRel();
+    final RelMetadataQuery mq = rel.getCluster().getMetadataQuery();
+    Double ndv = mq.getDistinctRowCount(rel, ImmutableBitSet.of(0, 1), null);
+    assertThat(ndv, is(100.0));
   }
 
   private void checkInputForCollationAndLimit(RelOptCluster cluster, RelOptTable empTable,
@@ -3378,8 +3598,48 @@ public class RelMetadataTest {
       t1.addColumn("key1", typeFactory.createSqlType(SqlTypeName.VARCHAR), true);
       t1.addColumn("key2", typeFactory.createSqlType(SqlTypeName.VARCHAR), true);
       t1.addColumn("value1", typeFactory.createSqlType(SqlTypeName.INTEGER));
+      addSizeHandler(t1);
+      addDistinctRowcountHandler(t1);
+      addUniqueKeyHandler(t1);
       registerTable(t1);
       return this;
+    }
+
+    private void addSizeHandler(MockTable table) {
+      table.addWrap(
+          new BuiltInMetadata.Size.Handler() {
+            @Override public @Nullable Double averageRowSize(RelNode r, RelMetadataQuery mq) {
+              return null;
+            }
+
+            @Override public @Nullable List<@Nullable Double> averageColumnSizes(RelNode r,
+                RelMetadataQuery mq) {
+              List<Double> colSize = new ArrayList<>();
+              colSize.add(2D);
+              colSize.add(3D);
+              return colSize;
+            }
+          });
+    }
+
+    private void addDistinctRowcountHandler(MockTable table) {
+      table.addWrap(
+          new BuiltInMetadata.DistinctRowCount.Handler() {
+            @Override public @Nullable Double getDistinctRowCount(RelNode r, RelMetadataQuery mq,
+                ImmutableBitSet groupKey, @Nullable RexNode predicate) {
+              return 100D;
+            }
+          });
+    }
+
+    private void addUniqueKeyHandler(MockTable table) {
+      table.addWrap(
+          new BuiltInMetadata.UniqueKeys.Handler() {
+            @Override public @Nullable Set<ImmutableBitSet> getUniqueKeys(RelNode r,
+                RelMetadataQuery mq, boolean ignoreNulls) {
+              return ImmutableSet.of(ImmutableBitSet.of(0, 1));
+            }
+          });
     }
   }
 }

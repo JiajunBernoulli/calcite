@@ -71,10 +71,13 @@ class EmbeddedElasticsearchNode implements AutoCloseable {
   }
 
   /**
-   * Creates elastic node as single member of a cluster. Node will not be started
-   * unless {@link #start()} is explicitly called.
-   * <p>Need {@code synchronized} because of static caches inside ES (which are not thread safe).
-   * @return instance which needs to be explicitly started (using {@link #start()})
+   * Creates elastic node as single member of a cluster. Node will not
+   * be started unless {@link #start()} is explicitly called.
+   *
+   * <p>Need {@code synchronized} because of static caches inside ES
+   * (which are not thread safe).
+   *
+   * @return instance; needs to be explicitly started using {@link #start()}
    */
   public static synchronized EmbeddedElasticsearchNode create() {
     File data;
@@ -115,6 +118,7 @@ class EmbeddedElasticsearchNode implements AutoCloseable {
 
   /**
    * Returns current address to connect to with HTTP client.
+   *
    * @return hostname/port for HTTP connection
    */
   public TransportAddress httpAddress() {
@@ -146,7 +150,7 @@ class EmbeddedElasticsearchNode implements AutoCloseable {
   @Override public void close() throws Exception {
     node.close();
     // cleanup data dirs
-    for (String name: Arrays.asList("path.data", "path.home")) {
+    for (String name : Arrays.asList("path.data", "path.home")) {
       if (node.settings().get(name) != null) {
         File file = new File(node.settings().get(name));
         if (file.exists()) {

@@ -285,11 +285,10 @@ class RelFieldTrimmerTest {
         HintStrategyTable.builder().hintStrategy("resource", HintPredicates.PROJECT).build());
     final RelNode original =
         builder.scan("EMP")
-            .project(
-                builder.field("EMPNO"),
+            .project(builder.field("EMPNO"),
                 builder.field("ENAME"),
-                builder.field("DEPTNO")
-            ).hints(projectHint)
+                builder.field("DEPTNO"))
+            .hints(projectHint)
             .sort(builder.field("EMPNO"))
             .project(builder.field("EMPNO"))
             .build();
@@ -412,11 +411,10 @@ class RelFieldTrimmerTest {
         HintStrategyTable.builder().hintStrategy("resource", HintPredicates.CALC).build());
     final RelNode original =
         builder.scan("EMP")
-            .project(
-                builder.field("EMPNO"),
+            .project(builder.field("EMPNO"),
                 builder.field("ENAME"),
-                builder.field("DEPTNO")
-            ).hints(calcHint)
+                builder.field("DEPTNO"))
+            .hints(calcHint)
             .sort(builder.field("EMPNO"))
             .project(builder.field("EMPNO"))
             .build();
@@ -515,5 +513,34 @@ class RelFieldTrimmerTest {
           + "  LogicalValues(tuples=[[{ 0 }, { 2 }]])\n";
       assertThat(trimmed, hasTree(expected));
     }
+  }
+
+  @Test void testUnionFieldTrimmer() {
+    final RelBuilder builder = RelBuilder.create(config().build());
+    final RelNode root =
+        builder.scan("EMP").as("t1")
+            .project(builder.field("EMPNO"))
+            .scan("EMP").as("t2")
+            .scan("EMP").as("t3")
+            .join(JoinRelType.INNER,
+                builder.equals(
+                    builder.field(2, "t2", "EMPNO"),
+                    builder.field(2, "t3", "EMPNO")))
+            .project(builder.field("t2", "EMPNO"))
+            .union(false)
+            .build();
+    final RelFieldTrimmer fieldTrimmer = new RelFieldTrimmer(null, builder);
+    final RelNode trimmed = fieldTrimmer.trim(root);
+    final String expected = ""
+        + "LogicalUnion(all=[false])\n"
+        + "  LogicalProject(EMPNO=[$0])\n"
+        + "    LogicalTableScan(table=[[scott, EMP]])\n"
+        + "  LogicalProject(EMPNO=[$0])\n"
+        + "    LogicalJoin(condition=[=($0, $1)], joinType=[inner])\n"
+        + "      LogicalProject(EMPNO=[$0])\n"
+        + "        LogicalTableScan(table=[[scott, EMP]])\n"
+        + "      LogicalProject(EMPNO=[$0])\n"
+        + "        LogicalTableScan(table=[[scott, EMP]])\n";
+    assertThat(trimmed, hasTree(expected));
   }
 }

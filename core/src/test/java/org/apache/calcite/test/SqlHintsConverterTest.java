@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 package org.apache.calcite.test;
-
 import org.apache.calcite.adapter.enumerable.EnumerableConvention;
 import org.apache.calcite.adapter.enumerable.EnumerableHashJoin;
 import org.apache.calcite.adapter.enumerable.EnumerableRules;
@@ -39,6 +38,7 @@ import org.apache.calcite.rel.core.Filter;
 import org.apache.calcite.rel.core.Join;
 import org.apache.calcite.rel.core.JoinInfo;
 import org.apache.calcite.rel.core.Snapshot;
+import org.apache.calcite.rel.core.TableFunctionScan;
 import org.apache.calcite.rel.core.TableScan;
 import org.apache.calcite.rel.core.Window;
 import org.apache.calcite.rel.hint.HintPredicate;
@@ -75,6 +75,8 @@ import org.apache.calcite.util.Util;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.immutables.value.Value;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -89,9 +91,10 @@ import java.util.stream.Stream;
 import static org.apache.calcite.test.Matchers.relIsValid;
 import static org.apache.calcite.test.SqlToRelTestBase.NL;
 
+import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.collection.IsIn.in;
-import static org.hamcrest.core.Is.is;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -100,6 +103,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Unit test for {@link org.apache.calcite.rel.hint.RelHint}.
+ * See {@link RelOptRulesTest} for an explanation of how to add tests.
  */
 class SqlHintsConverterTest {
 
@@ -109,7 +113,8 @@ class SqlHintsConverterTest {
           "?", false, false)
           .withFactory(f ->
               f.withSqlToRelConfig(c ->
-                  c.withHintStrategyTable(HintTools.HINT_STRATEGY_TABLE)));
+                  c.withHintStrategyTable(HintTools.HINT_STRATEGY_TABLE)
+                      .withExpand(true)));
 
   static final RelOptFixture RULE_FIXTURE =
       RelOptFixture.DEFAULT
@@ -117,11 +122,22 @@ class SqlHintsConverterTest {
           .withConfig(c ->
               c.withHintStrategyTable(HintTools.HINT_STRATEGY_TABLE));
 
+  @Nullable
+  private static DiffRepository diffRepos = null;
+
+  @AfterAll
+  public static void checkActualAndReferenceFiles() {
+    if (diffRepos != null) {
+      diffRepos.checkActualAndReferenceFiles();
+    }
+  }
+
   protected Fixture fixture() {
     return FIXTURE;
   }
 
   protected RelOptFixture ruleFixture() {
+    diffRepos = RULE_FIXTURE.diffRepos();
     return RULE_FIXTURE;
   }
 
@@ -242,6 +258,18 @@ class SqlHintsConverterTest {
     sql(sql).ok();
   }
 
+  @Test void testSnapshotHints() {
+    final String sql = "select /*+ fast_snapshot(products_temporal) */ stream * from\n"
+        + " orders join products_temporal for system_time as of timestamp '2022-08-11 15:00:00'\n"
+        + " on orders.productid = products_temporal.productid";
+    sql(sql).ok();
+  }
+
+  @Test void testTableFunctionScanHints() {
+    final String sql = "select /*+ resource(parallelism='3') */ * from TABLE(ramp(5))";
+    sql(sql).ok();
+  }
+
   @Test void testHintsInSubQueryWithDecorrelation() {
     final String sql = "select /*+ resource(parallelism='3'), AGG_STRATEGY(TWO_PHASE) */\n"
         + "sum(e1.empno) from emp e1, dept d1\n"
@@ -339,13 +367,12 @@ class SqlHintsConverterTest {
     final SqlInsert insert = (SqlInsert) sql(sql).parseQuery();
     assert insert.getTargetTable() instanceof SqlTableRef;
     final SqlTableRef tableRef = (SqlTableRef) insert.getTargetTable();
-    List<RelHint> hints = SqlUtil.getRelHint(HintTools.HINT_STRATEGY_TABLE,
-        (SqlNodeList) tableRef.getOperandList().get(1));
+    List<RelHint> hints =
+        SqlUtil.getRelHint(HintTools.HINT_STRATEGY_TABLE,
+            (SqlNodeList) tableRef.getOperandList().get(1));
     assertHintsEquals(
-        Arrays.asList(
-          HintTools.PROPS_HINT,
-          HintTools.IDX_HINT,
-          HintTools.JOIN_HINT),
+        Arrays.asList(HintTools.PROPS_HINT, HintTools.IDX_HINT,
+            HintTools.JOIN_HINT),
         hints);
   }
 
@@ -355,13 +382,12 @@ class SqlHintsConverterTest {
     final SqlUpdate sqlUpdate = (SqlUpdate) sql(sql).parseQuery();
     assert sqlUpdate.getTargetTable() instanceof SqlTableRef;
     final SqlTableRef tableRef = (SqlTableRef) sqlUpdate.getTargetTable();
-    List<RelHint> hints = SqlUtil.getRelHint(HintTools.HINT_STRATEGY_TABLE,
-        (SqlNodeList) tableRef.getOperandList().get(1));
+    List<RelHint> hints =
+        SqlUtil.getRelHint(HintTools.HINT_STRATEGY_TABLE,
+            (SqlNodeList) tableRef.getOperandList().get(1));
     assertHintsEquals(
-        Arrays.asList(
-          HintTools.PROPS_HINT,
-          HintTools.IDX_HINT,
-          HintTools.JOIN_HINT),
+        Arrays.asList(HintTools.PROPS_HINT, HintTools.IDX_HINT,
+            HintTools.JOIN_HINT),
         hints);
   }
 
@@ -370,13 +396,12 @@ class SqlHintsConverterTest {
     final SqlDelete sqlDelete = (SqlDelete) sql(sql).parseQuery();
     assert sqlDelete.getTargetTable() instanceof SqlTableRef;
     final SqlTableRef tableRef = (SqlTableRef) sqlDelete.getTargetTable();
-    List<RelHint> hints = SqlUtil.getRelHint(HintTools.HINT_STRATEGY_TABLE,
-        (SqlNodeList) tableRef.getOperandList().get(1));
+    List<RelHint> hints =
+        SqlUtil.getRelHint(HintTools.HINT_STRATEGY_TABLE,
+            (SqlNodeList) tableRef.getOperandList().get(1));
     assertHintsEquals(
-        Arrays.asList(
-          HintTools.PROPS_HINT,
-          HintTools.IDX_HINT,
-          HintTools.JOIN_HINT),
+        Arrays.asList(HintTools.PROPS_HINT, HintTools.IDX_HINT,
+            HintTools.JOIN_HINT),
         hints);
   }
 
@@ -394,12 +419,11 @@ class SqlHintsConverterTest {
     final SqlMerge sqlMerge = (SqlMerge) sql(sql1).parseQuery();
     assert sqlMerge.getTargetTable() instanceof SqlTableRef;
     final SqlTableRef tableRef = (SqlTableRef) sqlMerge.getTargetTable();
-    List<RelHint> hints = SqlUtil.getRelHint(HintTools.HINT_STRATEGY_TABLE,
-        (SqlNodeList) tableRef.getOperandList().get(1));
+    List<RelHint> hints =
+        SqlUtil.getRelHint(HintTools.HINT_STRATEGY_TABLE,
+            (SqlNodeList) tableRef.getOperandList().get(1));
     assertHintsEquals(
-        Arrays.asList(
-            HintTools.PROPS_HINT,
-            HintTools.IDX_HINT,
+        Arrays.asList(HintTools.PROPS_HINT, HintTools.IDX_HINT,
             HintTools.JOIN_HINT),
         hints);
   }
@@ -474,17 +498,17 @@ class SqlHintsConverterTest {
         .hintOption("DEPT")
         .build();
     // Validate Volcano planner.
-    RuleSet ruleSet = RuleSets.ofList(
-        MockEnumerableJoinRule.create(hint), // Rule to validate the hint.
-        CoreRules.FILTER_PROJECT_TRANSPOSE,
-        CoreRules.FILTER_MERGE,
-        CoreRules.PROJECT_MERGE,
-        EnumerableRules.ENUMERABLE_JOIN_RULE,
-        EnumerableRules.ENUMERABLE_PROJECT_RULE,
-        EnumerableRules.ENUMERABLE_FILTER_RULE,
-        EnumerableRules.ENUMERABLE_SORT_RULE,
-        EnumerableRules.ENUMERABLE_LIMIT_RULE,
-        EnumerableRules.ENUMERABLE_TABLE_SCAN_RULE);
+    RuleSet ruleSet =
+        RuleSets.ofList(MockEnumerableJoinRule.create(hint), // validates hint
+            CoreRules.FILTER_PROJECT_TRANSPOSE,
+            CoreRules.FILTER_MERGE,
+            CoreRules.PROJECT_MERGE,
+            EnumerableRules.ENUMERABLE_JOIN_RULE,
+            EnumerableRules.ENUMERABLE_PROJECT_RULE,
+            EnumerableRules.ENUMERABLE_FILTER_RULE,
+            EnumerableRules.ENUMERABLE_SORT_RULE,
+            EnumerableRules.ENUMERABLE_LIMIT_RULE,
+            EnumerableRules.ENUMERABLE_TABLE_SCAN_RULE);
     ruleFixture()
         .sql(sql)
         .withVolcanoPlanner(false, p -> {
@@ -492,6 +516,48 @@ class SqlHintsConverterTest {
           RelOptUtil.registerDefaultRules(p, false, false);
           ruleSet.forEach(p::addRule);
         })
+        .check();
+  }
+
+  @Test void testHintsPropagationInVolcanoPlannerRules2() {
+    final String sql = "select /*+ no_hash_join */ ename, job\n"
+        + "from emp where not exists (select 1 from dept where emp.deptno = dept.deptno)";
+    final RelHint hint = RelHint.builder("NO_HASH_JOIN")
+        .inheritPath(0, 0)
+        .build();
+    // Validate Volcano planner.
+    RuleSet ruleSet =
+        RuleSets.ofList(MockEnumerableJoinRule.create(hint));  // validates hint
+    ruleFixture()
+        .sql(sql)
+        .withTrim(true)
+        .withVolcanoPlanner(false, p -> {
+          p.addRelTraitDef(RelCollationTraitDef.INSTANCE);
+          RelOptUtil.registerDefaultRules(p, false, false);
+          ruleSet.forEach(p::addRule);
+        })
+        .withExpand(true)
+        .check();
+  }
+
+  @Test void testHintsPropagationInVolcanoPlannerRules3() {
+    final String sql = "select /*+ no_hash_join */ ename, job\n"
+        + "from emp where not exists (select 1 from dept where emp.deptno = dept.deptno) order by ename";
+    final RelHint hint = RelHint.builder("NO_HASH_JOIN")
+        .inheritPath(0, 0, 0)
+        .build();
+    // Validate Volcano planner.
+    RuleSet ruleSet =
+        RuleSets.ofList(MockEnumerableJoinRule.create(hint)); // validates hint
+    ruleFixture()
+        .sql(sql)
+        .withTrim(true)
+        .withVolcanoPlanner(false, p -> {
+          p.addRelTraitDef(RelCollationTraitDef.INSTANCE);
+          RelOptUtil.registerDefaultRules(p, false, false);
+          ruleSet.forEach(p::addRule);
+        })
+        .withExpand(true)
         .check();
   }
 
@@ -519,8 +585,8 @@ class SqlHintsConverterTest {
     final String sql = "select /*+ use_merge_join(emp, dept) */\n"
         + "ename, job, sal, dept.name\n"
         + "from emp join dept on emp.deptno = dept.deptno";
-    RuleSet ruleSet = RuleSets.ofList(
-        EnumerableRules.ENUMERABLE_MERGE_JOIN_RULE,
+    RuleSet ruleSet =
+        RuleSets.ofList(EnumerableRules.ENUMERABLE_MERGE_JOIN_RULE,
         EnumerableRules.ENUMERABLE_JOIN_RULE,
         EnumerableRules.ENUMERABLE_PROJECT_RULE,
         EnumerableRules.ENUMERABLE_TABLE_SCAN_RULE,
@@ -534,6 +600,24 @@ class SqlHintsConverterTest {
           ruleSet.forEach(planner::addRule);
         })
         .check();
+  }
+
+  @Test void testHintExcludeRules() {
+    final String sql = "select empno from (select * from "
+            + "(select /*+ preserved_project */ empno, ename, deptno from emp)"
+            + " where deptno = 20)";
+
+    final RelNode rel = ruleFixture().sql(sql).toRel();
+    HepProgram program = new HepProgramBuilder()
+            .addRuleInstance(CoreRules.FILTER_PROJECT_TRANSPOSE)
+            .build();
+    HepPlanner planner = new HepPlanner(program);
+    planner.setRoot(rel);
+    RelNode newRel = planner.findBestExp();
+    Assertions.assertTrue(rel.deepEquals(newRel),
+        "Expected:\n"
+        + RelOptUtil.toString(rel) + "Computed:\n"
+        + RelOptUtil.toString(newRel));
   }
 
   //~ Methods ----------------------------------------------------------------
@@ -551,7 +635,8 @@ class SqlHintsConverterTest {
   }
 
   private static void assertHintsEquals(List<RelHint> expected, List<RelHint> actual) {
-    assertArrayEquals(expected.toArray(new RelHint[0]), actual.toArray(new RelHint[0]));
+    assertArrayEquals(expected.toArray(new RelHint[0]),
+        actual.toArray(new RelHint[0]));
   }
 
   //~ Inner Class ------------------------------------------------------------
@@ -572,7 +657,7 @@ class SqlHintsConverterTest {
 
     @Override public void onMatch(RelOptRuleCall call) {
       LogicalJoin join = call.rel(0);
-      assertThat(join.getHints().size(), is(1));
+      assertThat(join.getHints(), hasSize(1));
       call.transformTo(
           LogicalJoin.create(join.getLeft(),
               join.getRight(),
@@ -612,7 +697,7 @@ class SqlHintsConverterTest {
 
     @Override public RelNode convert(RelNode rel) {
       LogicalJoin join = (LogicalJoin) rel;
-      assertThat(join.getHints().size(), is(1));
+      assertThat(join.getHints(), hasSize(1));
       assertThat(join.getHints().get(0), is(expectedHint));
       List<RelNode> newInputs = new ArrayList<>();
       for (RelNode input : join.getInputs()) {
@@ -638,7 +723,7 @@ class SqlHintsConverterTest {
     }
   }
 
-  /** A visitor to validate a hintable node has specific hint. **/
+  /** A visitor to validate a hintable node has specific hint. */
   private static class ValidateHintVisitor extends RelVisitor {
     private final RelHint expectedHint;
     private final Class<?> clazz;
@@ -660,7 +745,7 @@ class SqlHintsConverterTest {
         @Nullable RelNode parent) {
       if (clazz.isInstance(node)) {
         Hintable rel = (Hintable) node;
-        assertThat(rel.getHints().size(), is(1));
+        assertThat(rel.getHints(), hasSize(1));
         assertThat(rel.getHints().get(0), is(expectedHint));
       }
       super.visit(node, ordinal, parent);
@@ -847,6 +932,16 @@ class SqlHintsConverterTest {
           if (window.getHints().size() > 0) {
             this.hintsCollect.add("Window:" + window.getHints());
           }
+        } else if (other instanceof Snapshot) {
+          Snapshot snapshot = (Snapshot) other;
+          if (snapshot.getHints().size() > 0) {
+            this.hintsCollect.add("Snapshot:" + snapshot.getHints());
+          }
+        } else if (other instanceof TableFunctionScan) {
+          TableFunctionScan scan = (TableFunctionScan) other;
+          if (scan.getHints().size() > 0) {
+            this.hintsCollect.add("TableFunctionScan:" + scan.getHints());
+          }
         }
         return super.visit(other);
       }
@@ -917,7 +1012,8 @@ class SqlHintsConverterTest {
         .hintStrategy(
             "resource", HintPredicates.or(
             HintPredicates.PROJECT, HintPredicates.AGGREGATE,
-                HintPredicates.CALC, HintPredicates.VALUES, HintPredicates.FILTER))
+                HintPredicates.CALC, HintPredicates.VALUES,
+                HintPredicates.FILTER, HintPredicates.TABLE_FUNCTION_SCAN))
         .hintStrategy("AGG_STRATEGY",
             HintStrategy.builder(HintPredicates.AGGREGATE)
                 .optionChecker(
@@ -936,10 +1032,14 @@ class SqlHintsConverterTest {
         .hintStrategy("async_merge", HintPredicates.SORT)
         .hintStrategy("mini_batch",
                 HintPredicates.and(HintPredicates.WINDOW, HintPredicates.PROJECT))
+        .hintStrategy("fast_snapshot", HintPredicates.SNAPSHOT)
         .hintStrategy("use_merge_join",
             HintStrategy.builder(
                 HintPredicates.and(HintPredicates.JOIN, joinWithFixedTableName()))
                 .excludedRules(EnumerableRules.ENUMERABLE_JOIN_RULE).build())
+              .hintStrategy(
+                  "preserved_project", HintStrategy.builder(
+               HintPredicates.PROJECT).excludedRules(CoreRules.FILTER_PROJECT_TRANSPOSE).build())
         .build();
     }
 

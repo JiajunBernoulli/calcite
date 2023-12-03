@@ -22,6 +22,8 @@ import org.checkerframework.checker.nullness.qual.NonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.checkerframework.dataflow.qual.Pure;
 
+import java.util.List;
+
 /**
  * The methods in this class allow to cast nullable reference to a non-nullable one.
  * This is an internal class, and it is not meant to be used as a public API.
@@ -72,6 +74,36 @@ public class Nullness {
       @Nullable T ref) {
     //noinspection ConstantConditions
     return (@NonNull T) ref;
+  }
+
+  /**
+   * Allows you to treat an array of nullable values as an array of non-nullable
+   * values.
+   *
+   * @param <T>     Type of the array elements
+   * @param ts      Array
+   * @return the argument, cast so that elements are @NonNull
+   */
+  @SuppressWarnings({"unchecked", "ConstantConditions"})
+  @Pure
+  public static <T> @NonNull T[] castNonNullArray(
+      @Nullable T[] ts) {
+    return (@NonNull T []) (Object) ts;
+  }
+
+  /**
+   * Allows you to treat a list of nullable values as an list of non-nullable
+   * values.
+   *
+   * @param <T>     Type of the list elements
+   * @param ts      List
+   * @return the argument, cast so that elements are @NonNull
+   */
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  @Pure
+  public static <T> List<@NonNull T> castNonNullList(
+      List<? extends @Nullable T> ts) {
+    return (List) (Object) ts;
   }
 
   /**

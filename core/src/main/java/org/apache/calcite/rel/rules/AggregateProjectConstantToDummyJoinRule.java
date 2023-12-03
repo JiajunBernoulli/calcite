@@ -65,7 +65,7 @@ public final class AggregateProjectConstantToDummyJoinRule
     final Aggregate aggregate = call.rel(0);
     final Project project = call.rel(1);
 
-    for (int groupKey: aggregate.getGroupSet().asList()) {
+    for (int groupKey : aggregate.getGroupSet().asList()) {
       if (groupKey >= aggregate.getRowType().getFieldCount()) {
         continue;
       }
@@ -114,9 +114,8 @@ public final class AggregateProjectConstantToDummyJoinRule
 
     builder.project(newProjects);
     builder.aggregate(
-        builder.groupKey(
-            aggregate.getGroupSet(), aggregate.getGroupSets()), aggregate.getAggCallList()
-    );
+        builder.groupKey(aggregate.getGroupSet(), aggregate.getGroupSets()),
+        aggregate.getAggCallList());
 
     call.transformTo(builder.build());
   }

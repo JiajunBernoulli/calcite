@@ -38,6 +38,8 @@ import org.apache.calcite.sql.type.AbstractSqlType;
 import org.apache.calcite.sql.type.SqlTypeUtil;
 import org.apache.calcite.sql.validate.SqlConformance;
 import org.apache.calcite.sql.validate.SqlConformanceEnum;
+import org.apache.calcite.util.format.FormatModel;
+import org.apache.calcite.util.format.FormatModels;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Suppliers;
@@ -289,6 +291,7 @@ public class SqlDialect {
     case "PHOENIX":
       return DatabaseProduct.PHOENIX;
     case "PRESTO":
+    case "AWS.ATHENA":
       return DatabaseProduct.PRESTO;
     case "MYSQL (INFOBRIGHT)":
       return DatabaseProduct.INFOBRIGHT;
@@ -476,8 +479,8 @@ public class SqlDialect {
     writer.sep((SqlKind.PLUS == sqlKind) ? "+" : "-");
     call.operand(1).unparse(writer, leftPrec, rightPrec);
     writer.endList(frame);
-    //Only two parameters are present normally
-    //Checking parameter count to prevent errors
+    // Only two parameters are present normally.
+    // Checking parameter count to prevent errors.
     if (call.getOperandList().size() > 2) {
       call.operand(2).unparse(writer, leftPrec, rightPrec);
     }
@@ -488,6 +491,10 @@ public class SqlDialect {
    * <code>INTERVAL '1 2:3:4' DAY(4) TO SECOND(4)</code>. */
   public void unparseSqlIntervalQualifier(SqlWriter writer,
       SqlIntervalQualifier qualifier, RelDataTypeSystem typeSystem) {
+    if (qualifier.timeFrameName != null) {
+      SqlIntervalQualifier.asIdentifier(qualifier).unparse(writer, 0, 0);
+      return;
+    }
     final String start = qualifier.timeUnitRange.startUnit.name();
     final int fractionalSecondPrecision =
         qualifier.getFractionalSecondPrecision(typeSystem);
@@ -717,18 +724,18 @@ public class SqlDialect {
   /**
    * Returns whether the dialect supports GROUP BY literals.
    *
-   * <p>For instance, in {@link DatabaseProduct#REDSHIFT}, the following queries are illegal.</p>
-   * <pre>{@code
+   * <p>For instance, in {@link DatabaseProduct#REDSHIFT}, the following queries
+   * are illegal:
+   *
+   * <blockquote><pre>{@code
    * select avg(salary)
    * from emp
    * group by true
-   * }</pre>
    *
-   *  <pre>{@code
    * select avg(salary)
    * from emp
    * group by 'a', DATE '2022-01-01'
-   * }</pre>
+   * }</pre></blockquote>
    */
   public boolean supportsGroupByLiteral() {
     return true;
@@ -751,6 +758,13 @@ public class SqlDialect {
   /** Returns whether this dialect supports APPROX_COUNT_DISTINCT functions. */
   public boolean supportsApproxCountDistinct() {
     return false;
+  }
+
+  /**
+   * Returns whether this dialect supports TIMESTAMP with precision.
+   */
+  public boolean supportsTimestampPrecision() {
+    return true;
   }
 
   /** Returns whether this dialect supports the use of FILTER clauses for
@@ -832,6 +846,13 @@ public class SqlDialect {
         // if needed, adjust varchar length to max length supported by the system
         maxPrecision = getTypeSystem().getMaxPrecision(type.getSqlTypeName());
         break;
+      case TIMESTAMP:
+        if (!supportsTimestampPrecision()) {
+          return new SqlDataTypeSpec(
+              new SqlBasicTypeNameSpec(type.getSqlTypeName(), SqlParserPos.ZERO),
+              SqlParserPos.ZERO);
+        }
+        break;
       default:
         break;
       }
@@ -844,9 +865,9 @@ public class SqlDialect {
   }
 
   /** Rewrite SINGLE_VALUE into expression based on database variants
-   *  E.g. HSQLDB, MYSQL, ORACLE, etc
+   * E.g. HSQLDB, MYSQL, ORACLE, etc.
    */
-  public SqlNode rewriteSingleValueExpr(SqlNode aggCall) {
+  public SqlNode rewriteSingleValueExpr(SqlNode aggCall, RelDataType relDataType) {
     LOGGER.debug("SINGLE_VALUE rewrite not supported for {}", databaseProduct);
     return aggCall;
   }
@@ -995,6 +1016,18 @@ public class SqlDialect {
       offset.unparse(writer, -1, -1);
       writer.endList(offsetFrame);
     }
+  }
+
+  /**
+   * Returns a description of the format string used by functions in this
+   * dialect.
+   *
+   * <p>Dialects may need to override this element mapping if they differ from
+   * <a href="https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Format-Models.html">
+   * Oracle's format elements</a>. By default, this returns {@link FormatModels#DEFAULT}.
+   */
+  public FormatModel getFormatModel() {
+    return FormatModels.DEFAULT;
   }
 
   /**
@@ -1365,7 +1398,7 @@ public class SqlDialect {
             .withDatabaseProductName(databaseProductName)
             .withIdentifierQuoteString(quoteString)
             .withNullCollation(nullCollation));
-      })::get;
+      });
     }
 
     /**

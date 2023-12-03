@@ -79,7 +79,7 @@ public abstract class MaterializedViewTester {
     if (substitutes.stream()
         .noneMatch(sub -> checker.test(RelOptUtil.toString(sub)))) {
       StringBuilder substituteMessages = new StringBuilder();
-      for (RelNode sub: substitutes) {
+      for (RelNode sub : substitutes) {
         substituteMessages.append(RelOptUtil.toString(sub)).append("\n");
       }
       throw new AssertionError("Materialized view failed to be matched by optimized results:\n"
@@ -100,7 +100,7 @@ public abstract class MaterializedViewTester {
     }
     final StringBuilder errMsgBuilder = new StringBuilder();
     errMsgBuilder.append("Optimization succeeds out of expectation: ");
-    for (RelNode res: results) {
+    for (RelNode res : results) {
       errMsgBuilder.append(RelOptUtil.toString(res)).append("\n");
     }
     throw new AssertionError(errMsgBuilder.toString());
@@ -112,8 +112,9 @@ public abstract class MaterializedViewTester {
       try {
         final SchemaPlus defaultSchema;
         if (f.schemaSpec == null) {
-          defaultSchema = rootSchema.add("hr",
-              new ReflectiveSchema(new MaterializationTest.HrFKUKSchema()));
+          defaultSchema =
+              rootSchema.add("hr",
+                  new ReflectiveSchema(new MaterializationTest.HrFKUKSchema()));
         } else {
           defaultSchema = CalciteAssert.addSchema(rootSchema, f.schemaSpec);
         }
@@ -123,11 +124,12 @@ public abstract class MaterializedViewTester {
             RelFactories.LOGICAL_BUILDER.create(cluster, relOptSchema);
         final MaterializationService.DefaultTableFactory tableFactory =
             new MaterializationService.DefaultTableFactory();
-        for (Pair<String, String> pair: f.materializationList) {
+        for (Pair<String, String> pair : f.materializationList) {
           String sql = requireNonNull(pair.left, "sql");
           final RelNode mvRel = toRel(cluster, rootSchema, defaultSchema, sql);
-          final Table table = tableFactory.createTable(CalciteSchema.from(rootSchema),
-              sql, ImmutableList.of(defaultSchema.getName()));
+          final Table table =
+              tableFactory.createTable(CalciteSchema.from(rootSchema),
+                  sql, ImmutableList.of(defaultSchema.getName()));
           String name = requireNonNull(pair.right, "name");
           defaultSchema.add(name, table);
           relBuilder.scan(defaultSchema.getName(), name);
@@ -150,11 +152,11 @@ public abstract class MaterializedViewTester {
     final SqlParser parser = SqlParser.create(sql, SqlParser.Config.DEFAULT);
     final SqlNode parsed = parser.parseStmt();
 
-    final CalciteCatalogReader catalogReader = new CalciteCatalogReader(
-        CalciteSchema.from(rootSchema),
-        CalciteSchema.from(defaultSchema).path(null),
-        new JavaTypeFactoryImpl(),
-        CalciteConnectionConfig.DEFAULT);
+    final CalciteCatalogReader catalogReader =
+        new CalciteCatalogReader(CalciteSchema.from(rootSchema),
+            CalciteSchema.from(defaultSchema).path(null),
+            new JavaTypeFactoryImpl(),
+            CalciteConnectionConfig.DEFAULT);
 
     final SqlValidator validator =
         SqlValidatorUtil.newValidator(SqlStdOperatorTable.instance(),
@@ -165,10 +167,13 @@ public abstract class MaterializedViewTester {
         .withTrimUnusedFields(true)
         .withExpand(true)
         .withDecorrelationEnabled(true);
-    final SqlToRelConverter converter = new SqlToRelConverter(
-        (rowType, queryString, schemaPath, viewPath) -> {
-          throw new UnsupportedOperationException("cannot expand view");
-        }, validator, catalogReader, cluster, StandardConvertletTable.INSTANCE, config);
+    final SqlToRelConverter converter =
+        new SqlToRelConverter(
+            (rowType, queryString, schemaPath, viewPath) -> {
+              throw new UnsupportedOperationException("cannot expand view");
+            },
+            validator, catalogReader, cluster, StandardConvertletTable.INSTANCE,
+            config);
     return converter.convertQuery(validated, false, true).rel;
   }
 

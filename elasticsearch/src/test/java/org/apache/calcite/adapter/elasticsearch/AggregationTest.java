@@ -77,7 +77,7 @@ class AggregationTest {
         .enable(JsonParser.Feature.ALLOW_SINGLE_QUOTES); // avoid too much quoting
 
     final List<ObjectNode> docs = new ArrayList<>();
-    for (String text: Arrays.asList(doc1, doc2, doc3)) {
+    for (String text : Arrays.asList(doc1, doc2, doc3)) {
       docs.add((ObjectNode) mapper.readTree(text));
     }
 
@@ -94,15 +94,17 @@ class AggregationTest {
         new ElasticsearchSchema(NODE.restClient(), NODE.mapper(), NAME));
 
     // add calcite view programmatically
-    final String viewSql = String.format(Locale.ROOT,
-        "select _MAP['cat1'] AS \"cat1\", "
-            + " _MAP['cat2']  AS \"cat2\", "
-            + " _MAP['cat3'] AS \"cat3\", "
-            + " _MAP['cat4'] AS \"cat4\", "
-            + " _MAP['cat5'] AS \"cat5\", "
-            + " _MAP['val1'] AS \"val1\", "
-            + " _MAP['val2'] AS \"val2\" "
-            + " from \"elastic\".\"%s\"", NAME);
+    final String viewSql =
+        String.format(Locale.ROOT,
+            "select _MAP['cat1'] AS \"cat1\", "
+                + " _MAP['cat2']  AS \"cat2\", "
+                + " _MAP['cat3'] AS \"cat3\", "
+                + " _MAP['cat4'] AS \"cat4\", "
+                + " _MAP['cat5'] AS \"cat5\", "
+                + " _MAP['val1'] AS \"val1\", "
+                + " _MAP['val2'] AS \"val2\" "
+                + " from \"elastic\".\"%s\"",
+            NAME);
 
     root.add("view",
         ViewTable.viewMacro(root, viewSql,

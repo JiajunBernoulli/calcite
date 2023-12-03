@@ -90,11 +90,32 @@ public class CassandraSchema extends AbstractSchema {
    * @param name the schema name
    */
   public CassandraSchema(CqlSession session, SchemaPlus parentSchema, String name) {
+    this(
+        session,
+        parentSchema,
+        session.getKeyspace()
+          .orElseThrow(() -> new RuntimeException("No keyspace for session " + session.getName()))
+          .asInternal(),
+        name);
+  }
+
+  /**
+   * Creates a Cassandra schema.
+   *
+   * @param session a Cassandra session
+   * @param parentSchema the parent schema
+   * @param keyspace the keyspace name
+   * @param name the schema name
+   */
+  public CassandraSchema(
+      CqlSession session,
+      SchemaPlus parentSchema,
+      String keyspace,
+      String name) {
     super();
+
     this.session = session;
-    this.keyspace = session.getKeyspace()
-        .orElseThrow(() -> new RuntimeException("No keyspace for session " + session.getName()))
-        .asInternal();
+    this.keyspace = keyspace;
     this.parentSchema = parentSchema;
     this.name = name;
     this.hook = prepareHook();
@@ -138,31 +159,31 @@ public class CassandraSchema extends AbstractSchema {
       final String columnName = column.getName().asInternal();
 
       if (dataType instanceof ListType) {
-        SqlTypeName arrayInnerType = CQL_TO_SQL_TYPE.lookup(
-            ((ListType) dataType).getElementType());
+        SqlTypeName arrayInnerType =
+            CQL_TO_SQL_TYPE.lookup(((ListType) dataType).getElementType());
 
         fieldInfo.add(columnName,
                 typeFactory.createArrayType(
                     typeFactory.createSqlType(arrayInnerType), -1))
             .nullable(true);
       } else if (dataType instanceof SetType) {
-        SqlTypeName multiSetInnerType = CQL_TO_SQL_TYPE.lookup(
-            ((SetType) dataType).getElementType());
+        SqlTypeName multiSetInnerType =
+            CQL_TO_SQL_TYPE.lookup(((SetType) dataType).getElementType());
 
         fieldInfo.add(columnName,
-            typeFactory.createMultisetType(
-                typeFactory.createSqlType(multiSetInnerType), -1)
-        ).nullable(true);
+                typeFactory.createMultisetType(
+                    typeFactory.createSqlType(multiSetInnerType), -1))
+            .nullable(true);
       } else if (dataType instanceof MapType) {
         MapType columnType = (MapType) dataType;
         SqlTypeName keyType = CQL_TO_SQL_TYPE.lookup(columnType.getKeyType());
         SqlTypeName valueType = CQL_TO_SQL_TYPE.lookup(columnType.getValueType());
 
         fieldInfo.add(columnName,
-            typeFactory.createMapType(
-                typeFactory.createSqlType(keyType),
-                typeFactory.createSqlType(valueType))
-        ).nullable(true);
+                typeFactory.createMapType(
+                    typeFactory.createSqlType(keyType),
+                    typeFactory.createSqlType(valueType)))
+            .nullable(true);
       } else if (dataType instanceof TupleType) {
         List<DataType> typeArgs = ((TupleType) dataType).getComponentTypes();
         List<Map.Entry<String, RelDataType>> typesList =
@@ -323,11 +344,11 @@ public class CassandraSchema extends AbstractSchema {
     final ImmutableMap.Builder<String, Table> builder = ImmutableMap.builder();
     for (TableMetadata table : getKeyspace().getTables().values()) {
       String tableName = table.getName().asInternal();
-      builder.put(tableName, new CassandraTable(this, tableName));
+      builder.put(tableName, new CassandraTable(this, keyspace, tableName));
 
       for (ViewMetadata view : getKeyspace().getViewsOnTable(table.getName()).values()) {
         String viewName = view.getName().asInternal();
-        builder.put(viewName, new CassandraTable(this, viewName, true));
+        builder.put(viewName, new CassandraTable(this, keyspace, viewName, true));
       }
     }
     return builder.build();

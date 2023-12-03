@@ -46,7 +46,6 @@ import java.text.DecimalFormat;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -54,14 +53,18 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.stream.Collectors;
+
+import static com.google.common.collect.ImmutableList.toImmutableList;
+
+import static org.apache.calcite.util.Util.transform;
 
 /**
  * This is a tool to visualize the rule match process of a RelOptPlanner.
  *
- * <pre>{@code
+ * <blockquote><pre>{@code
  * // create the visualizer
- * RuleMatchVisualizer viz = new RuleMatchVisualizer("/path/to/output/dir", "file-name-suffix");
+ * RuleMatchVisualizer viz =
+ *     new RuleMatchVisualizer("/path/to/output/dir", "file-name-suffix");
  * viz.attachTo(planner)
  *
  * planner.findBestExpr();
@@ -69,7 +72,7 @@ import java.util.stream.Collectors;
  * // extra step for HepPlanner: write the output to files
  * // a VolcanoPlanner will call it automatically
  * viz.writeToFile();
- * }</pre>
+ * }</pre></blockquote>
  */
 public class RuleMatchVisualizer implements RelOptListener {
 
@@ -96,10 +99,11 @@ public class RuleMatchVisualizer implements RelOptListener {
   private final Map<String, NodeUpdateHelper> allNodes = new LinkedHashMap<>();
 
   /**
-   * Use this constructor to save the result on disk at the end of the planning phase.
-   * <p>
-   * Note: when using HepPlanner, {@link #writeToFile()} needs to be called manually.
-   * </p>
+   * Use this constructor to save the result on disk at the end of the planning
+   * phase.
+   *
+   * <p>Note: when using HepPlanner, {@link #writeToFile()} needs to be called
+   * manually.
    */
   public RuleMatchVisualizer(
       String outputDirectory,
@@ -158,8 +162,7 @@ public class RuleMatchVisualizer implements RelOptListener {
    */
   private void updateInitialPlan(RelNode node) {
     if (node instanceof HepRelVertex) {
-      HepRelVertex v = (HepRelVertex) node;
-      updateInitialPlan(v.getCurrentRel());
+      updateInitialPlan(node.stripped());
       return;
     }
     this.registerRelNode(node);
@@ -173,12 +176,8 @@ public class RuleMatchVisualizer implements RelOptListener {
    * (Workaround for HepPlanner)
    */
   private static List<RelNode> getInputs(final RelNode node) {
-    return node.getInputs().stream().map(n -> {
-      if (n instanceof HepRelVertex) {
-        return ((HepRelVertex) n).getCurrentRel();
-      }
-      return n;
-    }).collect(Collectors.toList());
+    return transform(node.getInputs(), n ->
+        n instanceof HepRelVertex ? n.stripped() : n);
   }
 
   @Override public void relChosen(RelChosenEvent event) {
@@ -354,9 +353,10 @@ public class RuleMatchVisualizer implements RelOptListener {
       }
     }
 
-    List<String> matchedRels = ruleCall == null
-        ? Collections.emptyList()
-        : Arrays.stream(ruleCall.rels).map(this::key).collect(Collectors.toList());
+    List<String> matchedRels =
+        Arrays.stream(ruleCall == null ? new RelNode[0] : ruleCall.rels)
+            .map(RuleMatchVisualizer::key)
+            .collect(toImmutableList());
     this.steps.add(new StepInfo(stepID, nextNodeUpdates, matchedRels));
   }
 
@@ -375,8 +375,8 @@ public class RuleMatchVisualizer implements RelOptListener {
 
   /**
    * Writes the HTML and JS files of the rule match visualization.
-   * <p>
-   * The old files with the same name will be replaced.
+   *
+   * <p>The old files with the same name will be replaced.
    */
   public void writeToFile() {
     if (outputDirectory == null || outputSuffix == null) {
@@ -423,11 +423,11 @@ public class RuleMatchVisualizer implements RelOptListener {
   // methods related to string representation
   //--------------------------------------------------------------------------------
 
-  private String key(final RelNode rel) {
+  private static String key(final RelNode rel) {
     return "" + rel.getId();
   }
 
-  private String getNodeLabel(final RelNode relNode) {
+  private static String getNodeLabel(final RelNode relNode) {
     if (relNode instanceof RelSubset) {
       final RelSubset relSubset = (RelSubset) relNode;
       String setId = getSetId(relSubset);
@@ -438,7 +438,7 @@ public class RuleMatchVisualizer implements RelOptListener {
     return "#" + relNode.getId() + "-" + relNode.getRelTypeName();
   }
 
-  private String getSetId(final RelSubset relSubset) {
+  private static String getSetId(final RelSubset relSubset) {
     String explanation = getNodeExplanation(relSubset);
     int start = explanation.indexOf("RelSubset") + "RelSubset".length();
     if (start < 0) {
@@ -451,7 +451,7 @@ public class RuleMatchVisualizer implements RelOptListener {
     return explanation.substring(start, end);
   }
 
-  private String getNodeExplanation(final RelNode relNode) {
+  private static String getNodeExplanation(final RelNode relNode) {
     InputExcludedRelWriter relWriter = new InputExcludedRelWriter();
     relNode.explain(relWriter);
     return relWriter.toString();
@@ -472,8 +472,7 @@ public class RuleMatchVisualizer implements RelOptListener {
             formatCostScientific(cost.getRows()),
             formatCostScientific(cost.getCpu()),
             formatCostScientific(cost.getIo())
-        }
-    );
+        });
   }
 
   private static String formatCostScientific(double costNumber) {

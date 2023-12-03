@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 package org.apache.calcite.sql.parser;
-
 import org.apache.calcite.avatica.util.Quoting;
 import org.apache.calcite.sql.SqlCall;
 import org.apache.calcite.sql.SqlDialect;
@@ -27,15 +26,19 @@ import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.SqlNodeList;
 import org.apache.calcite.sql.SqlSelect;
 import org.apache.calcite.sql.SqlSetOption;
+import org.apache.calcite.sql.SqlUnknownLiteral;
 import org.apache.calcite.sql.SqlWriterConfig;
 import org.apache.calcite.sql.dialect.AnsiSqlDialect;
 import org.apache.calcite.sql.dialect.SparkSqlDialect;
+import org.apache.calcite.sql.parser.SqlParser.Config;
 import org.apache.calcite.sql.pretty.SqlPrettyWriter;
 import org.apache.calcite.sql.test.SqlTestFactory;
 import org.apache.calcite.sql.test.SqlTests;
+import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql.util.SqlShuttle;
+import org.apache.calcite.sql.validate.SqlConformance;
 import org.apache.calcite.sql.validate.SqlConformanceEnum;
-import org.apache.calcite.test.DiffTestCase;
+import org.apache.calcite.test.IntervalTest;
 import org.apache.calcite.tools.Hoist;
 import org.apache.calcite.util.Bug;
 import org.apache.calcite.util.ConversionUtil;
@@ -43,8 +46,7 @@ import org.apache.calcite.util.Pair;
 import org.apache.calcite.util.TestUtil;
 import org.apache.calcite.util.Util;
 
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSortedSet;
 
 import org.checkerframework.checker.nullness.qual.Nullable;
@@ -58,17 +60,15 @@ import org.junit.jupiter.api.Test;
 import java.io.Reader;
 import java.io.StringReader;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Random;
 import java.util.SortedSet;
-import java.util.TreeSet;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
+import static org.apache.calcite.util.Static.RESOURCE;
 import static org.apache.calcite.util.Util.toLinux;
 
 import static org.hamcrest.CoreMatchers.containsString;
@@ -77,10 +77,11 @@ import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.CoreMatchers.notNullValue;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.hasToString;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * A <code>SqlParserTest</code> is a unit-test for
@@ -102,14 +103,14 @@ public class SqlParserTest {
    * the SQL:92, SQL:99, SQL:2003, SQL:2011, SQL:2014 standards and in Calcite.
    *
    * <p>The standard keywords are derived from
-   * <a href="https://developer.mimer.com/wp-content/uploads/2018/05/Standard-SQL-Reserved-Words-Summary.pdf">Mimer</a>
+   * <a href="https://developer.mimer.com/wp-content/uploads/standard-sql-reserved-words-summary.pdf">Mimer</a>
    * and from the specification.
    *
    * <p>If a new <b>reserved</b> keyword is added to the parser, include it in
    * this list, flagged "c". If the keyword is not intended to be a reserved
    * keyword, add it to the non-reserved keyword list in the parser.
    */
-  private static final List<String> RESERVED_KEYWORDS = ImmutableList.of(
+  private static final String[] RESERVED_KEYWORDS = {
       "ABS",                                               "2011", "2014", "c",
       "ABSOLUTE",                      "92", "99",
       "ACTION",                        "92", "99",
@@ -206,6 +207,7 @@ public class SqlParserTest {
       "CYCLE",                               "99", "2003", "2011", "2014", "c",
       "DATA",                                "99",
       "DATE",                          "92", "99", "2003", "2011", "2014", "c",
+      "DATETIME",                                                          "c",
       "DAY",                           "92", "99", "2003", "2011", "2014", "c",
       "DAYS",                                              "2011",
       "DEALLOCATE",                    "92", "99", "2003", "2011", "2014", "c",
@@ -269,6 +271,7 @@ public class SqlParserTest {
       "FOUND",                         "92", "99",
       "FRAME_ROW",                                                 "2014", "c",
       "FREE",                                "99", "2003", "2011", "2014", "c",
+      "FRIDAY",                                                            "c",
       "FROM",                          "92", "99", "2003", "2011", "2014", "c",
       "FULL",                          "92", "99", "2003", "2011", "2014", "c",
       "FUNCTION",                      "92", "99", "2003", "2011", "2014", "c",
@@ -318,6 +321,7 @@ public class SqlParserTest {
       "JSON_OBJECT",                                                       "c",
       "JSON_OBJECTAGG",                                                    "c",
       "JSON_QUERY",                                                        "c",
+      "JSON_SCOPE",                                                        "c",
       "JSON_VALUE",                                                        "c",
       "KEEP",                                              "2011",
       "KEY",                           "92", "99",
@@ -360,6 +364,7 @@ public class SqlParserTest {
       "MOD",                                               "2011", "2014", "c",
       "MODIFIES",                            "99", "2003", "2011", "2014", "c",
       "MODULE",                        "92", "99", "2003", "2011", "2014", "c",
+      "MONDAY",                                                            "c",
       "MONTH",                         "92", "99", "2003", "2011", "2014", "c",
       "MULTISET",                                  "2003", "2011", "2014", "c",
       "NAMES",                         "92", "99",
@@ -392,6 +397,7 @@ public class SqlParserTest {
       "OPTION",                        "92", "99",
       "OR",                            "92", "99", "2003", "2011", "2014", "c",
       "ORDER",                         "92", "99", "2003", "2011", "2014", "c",
+      "ORDINAL",                                                           "c",
       "ORDINALITY",                          "99",
       "OUT",                           "92", "99", "2003", "2011", "2014", "c",
       "OUTER",                         "92", "99", "2003", "2011", "2014", "c",
@@ -426,6 +432,7 @@ public class SqlParserTest {
       "PRIVILEGES",                    "92", "99",
       "PROCEDURE",                     "92", "99", "2003", "2011", "2014", "c",
       "PUBLIC",                        "92", "99",
+      "QUALIFY",                                                           "c",
       "RANGE",                               "99", "2003", "2011", "2014", "c",
       "RANK",                                              "2011", "2014", "c",
       "READ",                          "92", "99",
@@ -464,6 +471,10 @@ public class SqlParserTest {
       "ROWS",                          "92", "99", "2003", "2011", "2014", "c",
       "ROW_NUMBER",                                        "2011", "2014", "c",
       "RUNNING",                                                   "2014", "c",
+      "SAFE_CAST",                                                         "c",
+      "SAFE_OFFSET",                                                       "c",
+      "SAFE_ORDINAL",                                                      "c",
+      "SATURDAY",                                                          "c",
       "SAVEPOINT",                           "99", "2003", "2011", "2014", "c",
       "SCHEMA",                        "92", "99",
       "SCOPE",                               "99", "2003", "2011", "2014", "c",
@@ -508,6 +519,7 @@ public class SqlParserTest {
       "SUBSTRING_REGEX",                                   "2011", "2014", "c",
       "SUCCEEDS",                                                  "2014", "c",
       "SUM",                           "92",               "2011", "2014", "c",
+      "SUNDAY",                                                            "c",
       "SYMMETRIC",                           "99", "2003", "2011", "2014", "c",
       "SYSTEM",                              "99", "2003", "2011", "2014", "c",
       "SYSTEM_TIME",                                               "2014", "c",
@@ -516,6 +528,7 @@ public class SqlParserTest {
       "TABLESAMPLE",                               "2003", "2011", "2014", "c",
       "TEMPORARY",                     "92", "99",
       "THEN",                          "92", "99", "2003", "2011", "2014", "c",
+      "THURSDAY",                                                          "c",
       "TIME",                          "92", "99", "2003", "2011", "2014", "c",
       "TIMESTAMP",                     "92", "99", "2003", "2011", "2014", "c",
       "TIMEZONE_HOUR",                 "92", "99", "2003", "2011", "2014", "c",
@@ -533,6 +546,8 @@ public class SqlParserTest {
       "TRIM_ARRAY",                                        "2011", "2014", "c",
       "TRUE",                          "92", "99", "2003", "2011", "2014", "c",
       "TRUNCATE",                                          "2011", "2014", "c",
+      "TRY_CAST",                                                          "c",
+      "TUESDAY",                                                           "c",
       "UESCAPE",                                           "2011", "2014", "c",
       "UNDER",                               "99",
       "UNDO",                          "92", "99", "2003",
@@ -559,6 +574,7 @@ public class SqlParserTest {
       "VERSIONING",                                        "2011", "2014", "c",
       "VERSIONS",                                          "2011",
       "VIEW",                          "92", "99",
+      "WEDNESDAY",                                                         "c",
       "WHEN",                          "92", "99", "2003", "2011", "2014", "c",
       "WHENEVER",                      "92", "99", "2003", "2011", "2014", "c",
       "WHERE",                         "92", "99", "2003", "2011", "2014", "c",
@@ -572,7 +588,8 @@ public class SqlParserTest {
       "WRITE",                         "92", "99",
       "YEAR",                          "92", "99", "2003", "2011", "2014", "c",
       "YEARS",                                             "2011",
-      "ZONE",                          "92", "99");
+      "ZONE",                          "92", "99",
+  };
 
   private static final String ANY = "(?s).*";
 
@@ -583,7 +600,7 @@ public class SqlParserTest {
           .withFromFolding(SqlWriterConfig.LineFolding.TALL)
           .withIndentation(0);
 
-  private static final SqlDialect BIG_QUERY =
+  protected static final SqlDialect BIG_QUERY =
       SqlDialect.DatabaseProduct.BIG_QUERY.getDialect();
   private static final SqlDialect CALCITE =
       SqlDialect.DatabaseProduct.CALCITE.getDialect();
@@ -708,6 +725,37 @@ public class SqlParserTest {
             + ".*");
   }
 
+  /** Test case for <a href="https://issues.apache.org/jira/browse/CALCITE-5997">[CALCITE-5997]
+   * OFFSET operator is incorrectly unparsed</a>. */
+  @Test void testOffset() {
+    sql("SELECT ARRAY[2,4,6][2]")
+        .ok("SELECT (ARRAY[2, 4, 6])[2]");
+    sql("SELECT ARRAY[2,4,6][ORDINAL(2)]")
+        .withDialect(BIG_QUERY)
+        .ok("SELECT (ARRAY[2, 4, 6])[ORDINAL(2)]");
+    sql("SELECT ARRAY[2,4,6][OFFSET(2)]")
+        .withDialect(BIG_QUERY)
+        .ok("SELECT (ARRAY[2, 4, 6])[OFFSET(2)]");
+    sql("SELECT ARRAY[2,4,6][SAFE_OFFSET(2)]")
+        .withDialect(BIG_QUERY)
+        .ok("SELECT (ARRAY[2, 4, 6])[SAFE_OFFSET(2)]");
+    sql("SELECT ARRAY[2,4,6][SAFE_ORDINAL(2)]")
+        .withDialect(BIG_QUERY)
+        .ok("SELECT (ARRAY[2, 4, 6])[SAFE_ORDINAL(2)]");
+
+    // All these tests work without BIG_QUERY as well.
+    // The SQL parser accepts this syntax, so we need to be
+    // able to unparse it into something.
+    sql("SELECT ARRAY[2,4,6][ORDINAL(2)]")
+        .ok("SELECT (ARRAY[2, 4, 6])[ORDINAL(2)]");
+    sql("SELECT ARRAY[2,4,6][OFFSET(2)]")
+        .ok("SELECT (ARRAY[2, 4, 6])[OFFSET(2)]");
+    sql("SELECT ARRAY[2,4,6][SAFE_OFFSET(2)]")
+        .ok("SELECT (ARRAY[2, 4, 6])[SAFE_OFFSET(2)]");
+    sql("SELECT ARRAY[2,4,6][SAFE_ORDINAL(2)]")
+        .ok("SELECT (ARRAY[2, 4, 6])[SAFE_ORDINAL(2)]");
+  }
+
   @Test void testInvalidToken() {
     // Causes problems to the test infrastructure because the token mgr
     // throws a java.lang.Error. The usual case is that the parser throws
@@ -734,6 +782,52 @@ public class SqlParserTest {
         .fails("(?s)Encountered \"\\. \\*\" at .*");
     sql("select emp.empno AS x from ^*^")
         .fails("(?s)Encountered \"\\*\" at .*");
+  }
+
+  @Test void testPercentileCont() {
+    sql("select percentile_cont(.5) within group (order by 3) from t")
+        .ok("SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY 3)\n"
+            + "FROM `T`");
+  }
+
+  @Test void testPercentileDisc() {
+    sql("select percentile_disc(.5) within group (order by 3) from t")
+        .ok("SELECT PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY 3)\n"
+            + "FROM `T`");
+  }
+
+  /** Tests BigQuery's variant of PERCENTILE_CONT, which uses OVER rather than
+   * WITHIN GROUP, and allows RESPECT/IGNORE NULLS inside the parentheses. */
+  @Test void testPercentileContBigQuery() {
+    sql("select percentile_cont(x, .5) over() from unnest(array[1,2,3,4]) as x")
+        .withDialect(BIG_QUERY)
+        .ok("SELECT (PERCENTILE_CONT(x, 0.5) OVER ())\n"
+            + "FROM UNNEST((ARRAY[1, 2, 3, 4])) AS x");
+    sql("select percentile_cont(x, .5 RESPECT NULLS) over() from unnest(array[1,2,3,4]) as x")
+        .withDialect(BIG_QUERY)
+        .ok("SELECT (PERCENTILE_CONT(x, 0.5) RESPECT NULLS OVER ())\n"
+            + "FROM UNNEST((ARRAY[1, 2, 3, 4])) AS x");
+    sql("select percentile_cont(x, .5 IGNORE NULLS) over() from unnest(array[1,null,3,4]) as x")
+        .withDialect(BIG_QUERY)
+        .ok("SELECT (PERCENTILE_CONT(x, 0.5) IGNORE NULLS OVER ())\n"
+            + "FROM UNNEST((ARRAY[1, NULL, 3, 4])) AS x");
+  }
+
+  /** Tests BigQuery's variant of PERCENTILE_DISC, which uses OVER rather than
+   * WITHIN GROUP, and allows RESPECT/IGNORE NULLS inside the parentheses. */
+  @Test void testPercentileDiscBigQuery() {
+    sql("select percentile_disc(x, .5) over() from unnest(array[1,2,3,4]) as x")
+        .withDialect(BIG_QUERY)
+        .ok("SELECT (PERCENTILE_DISC(x, 0.5) OVER ())\n"
+            + "FROM UNNEST((ARRAY[1, 2, 3, 4])) AS x");
+    sql("select percentile_disc(x, .5 RESPECT NULLS) over() from unnest(array[1,2,3,4]) as x")
+        .withDialect(BIG_QUERY)
+        .ok("SELECT (PERCENTILE_DISC(x, 0.5) RESPECT NULLS OVER ())\n"
+            + "FROM UNNEST((ARRAY[1, 2, 3, 4])) AS x");
+    sql("select percentile_disc(x, .5 IGNORE NULLS) over() from unnest(array[1,null,3,4]) as x")
+        .withDialect(BIG_QUERY)
+        .ok("SELECT (PERCENTILE_DISC(x, 0.5) IGNORE NULLS OVER ())\n"
+            + "FROM UNNEST((ARRAY[1, NULL, 3, 4])) AS x");
   }
 
   @Test void testHyphenatedTableName() {
@@ -821,7 +915,7 @@ public class SqlParserTest {
         + " salary = (t.salary * 0.1)\n"
         + "WHEN NOT MATCHED THEN"
         + " INSERT (name, dept, salary)"
-        + " (VALUES (t.name, 10, (t.salary * 0.15)))";
+        + " VALUES (t.name, 10, (t.salary * 0.15))";
     sql(mergeSql)
         .fails("(?s)Encountered \"-\" at .*")
         .withDialect(BIG_QUERY)
@@ -845,6 +939,53 @@ public class SqlParserTest {
         .ok(expected)
         .withDialect(BIG_QUERY)
         .ok(expectedBigQuery);
+  }
+
+  @Test void testDecimalLiteral() {
+    sql("select DECIMAL '99.999'")
+        .ok("SELECT 99.999");
+    sql("select DECIMAL '   99.999'")
+        .ok("SELECT 99.999");
+    sql("select DECIMAL '   99.999   '")
+        .ok("SELECT 99.999");
+    sql("select DECIMAL '+99.999'")
+        .ok("SELECT 99.999");
+    sql("select DECIMAL '-99.999'")
+        .ok("SELECT -99.999");
+    sql("select DECIMAL'-99.999'")
+        .ok("SELECT -99.999");
+    sql("select DECIMAL'99.999'")
+        .ok("SELECT 99.999");
+    sql("select DECIMAL'.999'")
+        .ok("SELECT 0.999");
+    sql("select DECIMAL'999.'")
+        .ok("SELECT 999");
+    sql("select DECIMAL'999'")
+        .ok("SELECT 999");
+    sql("select DECIMAL '2.11E-2'")
+        .ok("SELECT 0.0211");
+    sql("select DECIMAL '2.11E2'")
+        .ok("SELECT 211");
+    sql("select DECIMAL '.11E-2'")
+        .ok("SELECT 0.0011");
+    // Test case for [CALCITE-5999] DECIMAL literals as sometimes unparsed
+    // looking as DOUBLE literals.
+    sql("select DECIMAL '0.00000000000000001'")
+        .ok("SELECT 0.00000000000000001");
+    sql("select DECIMAL ^''^")
+        .fails("(?s)Literal '' can not be parsed to type 'DECIMAL'.*");
+    sql("select DECIMAL ^'-'^")
+        .fails("(?s)Literal '-' can not be parsed to type 'DECIMAL'.*");
+    sql("select DECIMAL ^'foo'^")
+        .fails("(?s)Literal 'foo' can not be parsed to type 'DECIMAL'.*");
+
+    // Test with bigquery
+    sql("select DECIMAL \"2.11E-2\"")
+        .withDialect(BIG_QUERY)
+        .ok("SELECT 0.0211");
+    sql("select DECIMAL \"999\"")
+        .withDialect(BIG_QUERY)
+        .ok("SELECT 999");
   }
 
   @Test void testDerivedColumnList() {
@@ -1284,11 +1425,20 @@ public class SqlParserTest {
 
   @Test void testRowWithDot() {
     sql("select (1,2).a from c.t")
-        .ok("SELECT ((ROW(1, 2)).`A`)\nFROM `C`.`T`");
+        .ok("SELECT ((ROW(1, 2)).`A`)\n"
+            + "FROM `C`.`T`");
     sql("select row(1,2).a from c.t")
-        .ok("SELECT ((ROW(1, 2)).`A`)\nFROM `C`.`T`");
+        .ok("SELECT ((ROW(1, 2)).`A`)\n"
+            + "FROM `C`.`T`");
     sql("select tbl.foo(0).col.bar from tbl")
-        .ok("SELECT ((`TBL`.`FOO`(0).`COL`).`BAR`)\nFROM `TBL`");
+        .ok("SELECT ((`TBL`.`FOO`(0).`COL`).`BAR`)\n"
+            + "FROM `TBL`");
+  }
+
+  @Test void testDotAfterParenthesizedIdentifier() {
+    sql("select (a).c.d from c.t")
+        .ok("SELECT ((`A`.`C`).`D`)\n"
+            + "FROM `C`.`T`");
   }
 
   @Test void testPeriod() {
@@ -1693,6 +1843,25 @@ public class SqlParserTest {
         .fails("(?s).*Encountered \"without\" at line 1, column 23.\n.*");
   }
 
+  /** Test for MSSQL CONVERT parsing, with focus on iffy DATE type and
+   * testing that the extra "style" operand is parsed
+   * Other tests are defined in functions.iq
+   */
+  @Test void testMssqlConvert() {
+    expr("CONVERT(VARCHAR(5), 'xx')")
+        .same();
+    expr("CONVERT(VARCHAR(5), 'xx')")
+        .same();
+    expr("CONVERT(VARCHAR(5), NULL)")
+        .same();
+    expr("CONVERT(VARCHAR(5), NULL, NULL)")
+        .same();
+    expr("CONVERT(DATE, 'xx', 121)")
+        .same();
+    expr("CONVERT(DATE, 'xx')")
+        .same();
+  }
+
   @Test void testLikeAndSimilar() {
     sql("select * from t where x like '%abc%'")
         .ok("SELECT *\n"
@@ -1888,29 +2057,96 @@ public class SqlParserTest {
     expr("'a' || 'b'").ok("('a' || 'b')");
   }
 
+  @Test void testCStyleEscapedString() {
+    expr("E'Apache\\tCalcite'")
+        .ok("_UTF16'Apache\tCalcite'");
+    expr("E'Apache\\bCalcite'")
+        .ok("_UTF16'Apache\bCalcite'");
+    expr("E'Apache\\fCalcite'")
+        .ok("_UTF16'Apache\fCalcite'");
+    expr("E'Apache\\nCalcite'")
+        .ok("_UTF16'Apache\nCalcite'");
+    expr("E'Apache\\rCalcite'")
+        .ok("_UTF16'Apache\rCalcite'");
+    expr("E'\\t\\n\\f'")
+        .ok("_UTF16'\t\n\f'");
+    expr("E'\\Apache Calcite'")
+        .ok("_UTF16'\\Apache Calcite'");
+
+    expr("E'\141'")
+        .ok("_UTF16'a'");
+    expr("E'\141\141\141'")
+        .ok("_UTF16'aaa'");
+    expr("E'\1411'")
+        .ok("_UTF16'a1'");
+
+    expr("E'\\x61'")
+        .ok("_UTF16'a'");
+    expr("E'\\x61\\x61\\x61'")
+        .ok("_UTF16'aaa'");
+    expr("E'\\x61\\x61\\x61'")
+        .ok("_UTF16'aaa'");
+    expr("E'\\xDg0000'")
+        .ok("_UTF16'\rg0000'");
+
+    expr("E'\\u0061'")
+        .ok("_UTF16'a'");
+    expr("E'\\u0061\\u0061\\u0061'")
+        .ok("_UTF16'aaa'");
+
+    expr("E'\\U00000061'")
+        .ok("_UTF16'a'");
+    expr("E'\\U00000061\\U00000061\\U00000061'")
+        .ok("_UTF16'aaa'");
+
+    expr("E'\\0'")
+        .ok("_UTF16'\u0000'");
+    expr("E'\\07'")
+        .ok("_UTF16'\u0007'");
+    expr("E'\\07'")
+        .ok("_UTF16'\u0007'");
+
+    expr("E'a\\'a\\'a\\''")
+        .ok("_UTF16'a''a''a'''");
+    expr("E'a''a''a'''")
+        .ok("_UTF16'a''a''a'''");
+
+    expr("E^'\\'^")
+        .fails("(?s).*Encountered .*");
+    expr("E^'a\\'^")
+        .fails("(?s).*Encountered.*");
+    expr("E'a\\''^a^'")
+        .fails("(?s).*Encountered.*");
+
+    expr("^E'A\\U0061'^")
+        .fails(RESOURCE.unicodeEscapeMalformed(1).str());
+    expr("^E'AB\\U0000006G'^")
+        .fails(RESOURCE.unicodeEscapeMalformed(2).str());
+  }
+
   @Test void testReverseSolidus() {
-    expr("'\\'").ok("'\\'");
+    expr("'\\'").same();
   }
 
   @Test void testSubstring() {
     expr("substring('a'\nFROM \t  1)")
-        .ok("SUBSTRING('a' FROM 1)");
+        .ok("SUBSTRING('a', 1)");
     expr("substring('a' FROM 1 FOR 3)")
-        .ok("SUBSTRING('a' FROM 1 FOR 3)");
+        .ok("SUBSTRING('a', 1, 3)");
     expr("substring('a' FROM 'reg' FOR '\\')")
-        .ok("SUBSTRING('a' FROM 'reg' FOR '\\')");
+        .ok("SUBSTRING('a', 'reg', '\\')");
 
     expr("substring('a', 'reg', '\\')")
-        .ok("SUBSTRING('a' FROM 'reg' FOR '\\')");
+        .ok("SUBSTRING('a', 'reg', '\\')");
     expr("substring('a', 1, 2)")
-        .ok("SUBSTRING('a' FROM 1 FOR 2)");
+        .ok("SUBSTRING('a', 1, 2)");
     expr("substring('a' , 1)")
-        .ok("SUBSTRING('a' FROM 1)");
+        .ok("SUBSTRING('a', 1)");
   }
 
   @Test void testFunction() {
     sql("select substring('Eggs and ham', 1, 3 + 2) || ' benedict' from emp")
-        .ok("SELECT (SUBSTRING('Eggs and ham' FROM 1 FOR (3 + 2)) || ' benedict')\n"
+        .ok("SELECT (SUBSTRING('Eggs and ham', 1, (3 + 2)) || ' benedict')\n"
             + "FROM `EMP`");
     expr("log10(1)\r\n"
         + "+power(2, mod(\r\n"
@@ -2122,6 +2358,29 @@ public class SqlParserTest {
     sql(sql).ok(expected);
   }
 
+  @Test void testGroupByAllOrDistinct() {
+    final String sql = "select deptno from emp\n"
+        + "group by all cube (a, b), rollup (a, b)";
+    final String expected = "SELECT `DEPTNO`\n"
+        + "FROM `EMP`\n"
+        + "GROUP BY CUBE(`A`, `B`), ROLLUP(`A`, `B`)";
+    sql(sql).ok(expected);
+
+    final String sql1 = "select deptno from emp\n"
+        + "group by distinct cube (a, b), rollup (a, b)";
+    final String expected1 = "SELECT `DEPTNO`\n"
+        + "FROM `EMP`\n"
+        + "GROUP BY DISTINCT CUBE(`A`, `B`), ROLLUP(`A`, `B`)";
+    sql(sql1).ok(expected1);
+
+    final String sql2 = "select deptno from emp\n"
+        + "group by cube (a, b), rollup (a, b)";
+    final String expected2 = "SELECT `DEPTNO`\n"
+        + "FROM `EMP`\n"
+        + "GROUP BY CUBE(`A`, `B`), ROLLUP(`A`, `B`)";
+    sql(sql2).ok(expected2);
+  }
+
   @Test void testGroupByCube2() {
     final String sql = "select deptno from emp\n"
         + "group by cube ((a, b), (c, d)) order by a";
@@ -2159,13 +2418,65 @@ public class SqlParserTest {
     sql(sql).ok(expected);
   }
 
+  @Test void testWithRecursive() {
+    final String sql = "WITH RECURSIVE aux(i) AS (\n"
+        + "  VALUES (1)\n"
+        + "  UNION ALL\n"
+        + "  SELECT i+1 FROM aux WHERE i < 10\n"
+        + "  )\n"
+        + "  SELECT * FROM aux";
+    final String expected = "WITH RECURSIVE `AUX` (`I`) AS ((VALUES (ROW(1)))\n"
+        + "UNION ALL\n"
+        + "SELECT (`I` + 1)\n"
+        + "FROM `AUX`\n"
+        + "WHERE (`I` < 10)) SELECT *\n"
+        + "FROM `AUX`";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testMultipleWithRecursive() {
+    final String sql = "WITH RECURSIVE a(x) AS\n"
+        + "  (SELECT 1),\n"
+        + "               b(y) AS\n"
+        + "  (SELECT x\n"
+        + "   FROM a\n"
+        + "   UNION ALL SELECT y + 1\n"
+        + "   FROM b\n"
+        + "   WHERE y < 2),\n"
+        + "               c(z) AS\n"
+        + "  (SELECT y\n"
+        + "   FROM b\n"
+        + "   UNION ALL SELECT z * 4\n"
+        + "   FROM c\n"
+        + "   WHERE z < 4 )\n"
+        + "SELECT *\n"
+        + "FROM a,\n"
+        + "     b,\n"
+        + "     c";
+    final String expected = "WITH RECURSIVE `A` (`X`) AS (SELECT 1), `B` (`Y`) AS (SELECT `X`\n"
+        + "FROM `A`\n"
+        + "UNION ALL\n"
+        + "SELECT (`Y` + 1)\n"
+        + "FROM `B`\n"
+        + "WHERE (`Y` < 2)), `C` (`Z`) AS (SELECT `Y`\n"
+        + "FROM `B`\n"
+        + "UNION ALL\n"
+        + "SELECT (`Z` * 4)\n"
+        + "FROM `C`\n"
+        + "WHERE (`Z` < 4)) SELECT *\n"
+        + "FROM `A`,\n"
+        + "`B`,\n"
+        + "`C`";
+    sql(sql).ok(expected);
+  }
+
   @Test void testWith() {
     final String sql = "with femaleEmps as (select * from emps where gender = 'F')"
         + "select deptno from femaleEmps";
     final String expected = "WITH `FEMALEEMPS` AS (SELECT *\n"
         + "FROM `EMPS`\n"
-        + "WHERE (`GENDER` = 'F')) (SELECT `DEPTNO`\n"
-        + "FROM `FEMALEEMPS`)";
+        + "WHERE (`GENDER` = 'F')) SELECT `DEPTNO`\n"
+        + "FROM `FEMALEEMPS`";
     sql(sql).ok(expected);
   }
 
@@ -2177,8 +2488,8 @@ public class SqlParserTest {
         + "FROM `EMPS`\n"
         + "WHERE (`GENDER` = 'F')), `MARRIEDFEMALEEMPS` (`X`, `Y`) AS (SELECT *\n"
         + "FROM `FEMALEEMPS`\n"
-        + "WHERE (`MARITASTATUS` = 'M')) (SELECT `DEPTNO`\n"
-        + "FROM `FEMALEEMPS`)";
+        + "WHERE (`MARITASTATUS` = 'M')) SELECT `DEPTNO`\n"
+        + "FROM `FEMALEEMPS`";
     sql(sql).ok(expected);
   }
 
@@ -2193,8 +2504,8 @@ public class SqlParserTest {
     final String sql = "with v(i,c) as (values (1, 'a'), (2, 'bb'))\n"
         + "select c, i from v";
     final String expected = "WITH `V` (`I`, `C`) AS (VALUES (ROW(1, 'a')),\n"
-        + "(ROW(2, 'bb'))) (SELECT `C`, `I`\n"
-        + "FROM `V`)";
+        + "(ROW(2, 'bb'))) SELECT `C`, `I`\n"
+        + "FROM `V`";
     sql(sql).ok(expected);
   }
 
@@ -2206,6 +2517,31 @@ public class SqlParserTest {
     sql(sql).fails("(?s)Encountered \"with\" at .*");
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5299">[CALCITE-5299]
+   * JDBC adapter sometimes adds unnecessary parentheses around SELECT in WITH body</a>. */
+  @Test void testWithSelect() {
+    final String sql = "with emp2 as (select * from emp)\n"
+        + "select * from emp2\n";
+    final String expected = "WITH `EMP2` AS (SELECT *\n"
+        + "FROM `EMP`) SELECT *\n"
+        + "FROM `EMP2`";
+    sql(sql).ok(expected);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5299">[CALCITE-5299]
+   * JDBC adapter sometimes adds unnecessary parentheses around SELECT in WITH body</a>. */
+  @Test void testWithOrderBy() {
+    final String sql = "with emp2 as (select * from emp)\n"
+        + "select * from emp2 order by deptno\n";
+    final String expected = "WITH `EMP2` AS (SELECT *\n"
+        + "FROM `EMP`) SELECT *\n"
+        + "FROM `EMP2`\n"
+        + "ORDER BY `DEPTNO`";
+    sql(sql).ok(expected);
+  }
+
   @Test void testWithNestedInSubQuery() {
     // SQL standard does not allow sub-query to contain WITH but we do
     final String sql = "with emp2 as (select * from emp)\n"
@@ -2214,8 +2550,8 @@ public class SqlParserTest {
         + "  select 1 as uno from empDept)";
     final String expected = "WITH `EMP2` AS (SELECT *\n"
         + "FROM `EMP`) (WITH `DEPT2` AS (SELECT *\n"
-        + "FROM `DEPT`) (SELECT 1 AS `UNO`\n"
-        + "FROM `EMPDEPT`))";
+        + "FROM `DEPT`) SELECT 1 AS `UNO`\n"
+        + "FROM `EMPDEPT`)";
     sql(sql).ok(expected);
   }
 
@@ -2226,11 +2562,65 @@ public class SqlParserTest {
         + "union\n"
         + "select * from emp2\n";
     final String expected = "WITH `EMP2` AS (SELECT *\n"
-        + "FROM `EMP`) (SELECT *\n"
+        + "FROM `EMP`) SELECT *\n"
         + "FROM `EMP2`\n"
         + "UNION\n"
         + "SELECT *\n"
-        + "FROM `EMP2`)";
+        + "FROM `EMP2`";
+    sql(sql).ok(expected);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5252">[CALCITE-5252]
+   * JDBC adapter sometimes miss parentheses around SELECT in WITH_ITEM body</a>. */
+  @Test void testWithAsUnion() {
+    final String sql = "with emp2 as (select * from emp union select * from emp)\n"
+        + "select * from emp2\n";
+    final String expected = "WITH `EMP2` AS (SELECT *\n"
+        + "FROM `EMP`\n"
+        + "UNION\n"
+        + "SELECT *\n"
+        + "FROM `EMP`) SELECT *\n"
+        + "FROM `EMP2`";
+    sql(sql).ok(expected);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5252">[CALCITE-5252]
+   * JDBC adapter sometimes miss parentheses around SELECT in WITH_ITEM body</a>. */
+  @Test void testWithAsOrderBy() {
+    final String sql = "with emp2 as (select * from emp order by deptno)\n"
+        + "select * from emp2\n";
+    final String expected = "WITH `EMP2` AS (SELECT *\n"
+        + "FROM `EMP`\n"
+        + "ORDER BY `DEPTNO`) SELECT *\n"
+        + "FROM `EMP2`";
+    sql(sql).ok(expected);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5252">[CALCITE-5252]
+   * JDBC adapter sometimes miss parentheses around SELECT in WITH_ITEM body</a>. */
+  @Test void testWithAsJoin() {
+    final String sql = "with emp2 as (select * from emp e1 join emp e2 on e1.deptno = e2.deptno)\n"
+        + "select * from emp2\n";
+    final String expected = "WITH `EMP2` AS (SELECT *\n"
+        + "FROM `EMP` AS `E1`\n"
+        + "INNER JOIN `EMP` AS `E2` ON (`E1`.`DEPTNO` = `E2`.`DEPTNO`)) SELECT *\n"
+        + "FROM `EMP2`";
+    sql(sql).ok(expected);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5252">[CALCITE-5252]
+   * JDBC adapter sometimes miss parentheses around SELECT in WITH_ITEM body</a>. */
+  @Test void testWithAsNestedInSubQuery() {
+    final String sql = "with emp3 as (with emp2 as (select * from emp) select * from emp2)\n"
+        + "select * from emp3\n";
+    final String expected = "WITH `EMP3` AS (WITH `EMP2` AS (SELECT *\n"
+        + "FROM `EMP`) SELECT *\n"
+        + "FROM `EMP2`) SELECT *\n"
+        + "FROM `EMP3`";
     sql(sql).ok(expected);
   }
 
@@ -2262,7 +2652,7 @@ public class SqlParserTest {
         .fails("(?s).*Encountered.*");
 
     f.sql("^\"^x`y`z\"").fails("(?s).*Encountered.*");
-    f.sql("`x``y``z`").ok("`x``y``z`");
+    f.sql("`x``y``z`").same();
     f.sql("`x\\`^y^\\`z`").fails("(?s).*Encountered.*");
 
     f.sql("myMap[field] + myArray[1 + 2]")
@@ -2372,8 +2762,8 @@ public class SqlParserTest {
         .withConfig(c -> c.withQuoting(Quoting.BRACKET)
             .withConformance(SqlConformanceEnum.DEFAULT));
     f2.fails(expectingAlias);
-    final String sql2b = "WITH `T` AS (SELECT 1 AS `x'y`) (SELECT `x'y`\n"
-        + "FROM `T` AS `u`)";
+    final String sql2b = "WITH `T` AS (SELECT 1 AS `x'y`) SELECT `x'y`\n"
+        + "FROM `T` AS `u`";
     f2.withConformance(SqlConformanceEnum.MYSQL_5)
         .ok(sql2b);
     f2.withConformance(SqlConformanceEnum.BIG_QUERY)
@@ -2383,8 +2773,8 @@ public class SqlParserTest {
 
     // also valid on MSSQL
     final String sql3 = "with [t] as (select 1 as [x]) select [x] from [t]";
-    final String sql3b = "WITH `t` AS (SELECT 1 AS `x`) (SELECT `x`\n"
-        + "FROM `t`)";
+    final String sql3b = "WITH `t` AS (SELECT 1 AS `x`) SELECT `x`\n"
+        + "FROM `t`";
     final SqlParserFixture f3 = sql(sql3)
         .withConfig(c -> c.withQuoting(Quoting.BRACKET)
             .withConformance(SqlConformanceEnum.DEFAULT));
@@ -2470,11 +2860,11 @@ public class SqlParserTest {
         + "select * from dept) and false")
         .ok("SELECT *\n"
             + "FROM `EMP`\n"
-            + "WHERE ((`DEPTNO` IN ((SELECT `DEPTNO`\n"
+            + "WHERE ((`DEPTNO` IN (SELECT `DEPTNO`\n"
             + "FROM `DEPT`\n"
             + "UNION\n"
             + "SELECT *\n"
-            + "FROM `DEPT`)\n"
+            + "FROM `DEPT`\n"
             + "EXCEPT\n"
             + "SELECT *\n"
             + "FROM `DEPT`)) AND FALSE)");
@@ -2534,23 +2924,23 @@ public class SqlParserTest {
 
   @Test void testUnion() {
     sql("select * from a union select * from a")
-        .ok("(SELECT *\n"
+        .ok("SELECT *\n"
             + "FROM `A`\n"
             + "UNION\n"
             + "SELECT *\n"
-            + "FROM `A`)");
+            + "FROM `A`");
     sql("select * from a union all select * from a")
-        .ok("(SELECT *\n"
+        .ok("SELECT *\n"
             + "FROM `A`\n"
             + "UNION ALL\n"
             + "SELECT *\n"
-            + "FROM `A`)");
+            + "FROM `A`");
     sql("select * from a union distinct select * from a")
-        .ok("(SELECT *\n"
+        .ok("SELECT *\n"
             + "FROM `A`\n"
             + "UNION\n"
             + "SELECT *\n"
-            + "FROM `A`)");
+            + "FROM `A`");
   }
 
   @Test void testUnionOrder() {
@@ -2558,11 +2948,11 @@ public class SqlParserTest {
         + "union all "
         + "select x, y from u "
         + "order by 1 asc, 2 desc")
-        .ok("(SELECT `A`, `B`\n"
+        .ok("SELECT `A`, `B`\n"
             + "FROM `T`\n"
             + "UNION ALL\n"
             + "SELECT `X`, `Y`\n"
-            + "FROM `U`)\n"
+            + "FROM `U`\n"
             + "ORDER BY 1, 2 DESC");
   }
 
@@ -2580,6 +2970,116 @@ public class SqlParserTest {
         + "^union^ all\n"
         + "select b from t order by b")
         .fails("(?s).*Encountered \"union\" at .*");
+  }
+
+  @Test void testLimitUnion2() {
+    // LIMIT is allowed in a parenthesized sub-query inside UNION;
+    // the result probably has more parentheses than strictly necessary.
+    final String sql = "(select a from t limit 10)\n"
+        + "union all\n"
+        + "(select b from t offset 20)";
+    final String expected = "(SELECT `A`\n"
+        + "FROM `T`\n"
+        + "FETCH NEXT 10 ROWS ONLY)\n"
+        + "UNION ALL\n"
+        + "(SELECT `B`\n"
+        + "FROM `T`\n"
+        + "OFFSET 20 ROWS)";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testUnionOffset() {
+    // Note that the second sub-query has parentheses, to ensure that ORDER BY,
+    // OFFSET, FETCH are associated with just that sub-query, not the UNION.
+    final String sql = "select a from t\n"
+        + "union all\n"
+        + "(select b from t order by b offset 3 fetch next 5 rows only)";
+    final String expected = "SELECT `A`\n"
+        + "FROM `T`\n"
+        + "UNION ALL\n"
+        + "(SELECT `B`\n"
+        + "FROM `T`\n"
+        + "ORDER BY `B`\n"
+        + "OFFSET 3 ROWS\n"
+        + "FETCH NEXT 5 ROWS ONLY)";
+    sql(sql).ok(expected);
+
+    // as above, just ORDER BY
+    final String sql2 = "select a from t\n"
+        + "union all\n"
+        + "(select b from t order by b)";
+    final String expected2 = "SELECT `A`\n"
+        + "FROM `T`\n"
+        + "UNION ALL\n"
+        + "(SELECT `B`\n"
+        + "FROM `T`\n"
+        + "ORDER BY `B`)";
+    sql(sql2).ok(expected2);
+
+    // as above, just OFFSET
+    final String sql3 = "select a from t\n"
+        + "union all\n"
+        + "(select b from t offset 3)";
+    final String expected3 = "SELECT `A`\n"
+        + "FROM `T`\n"
+        + "UNION ALL\n"
+        + "(SELECT `B`\n"
+        + "FROM `T`\n"
+        + "OFFSET 3 ROWS)";
+    sql(sql3).ok(expected3);
+
+    // as above, just FETCH
+    final String sql4 = "select a from t\n"
+        + "union all\n"
+        + "(select b from t fetch next 5 rows only)";
+    final String expected4 = "SELECT `A`\n"
+        + "FROM `T`\n"
+        + "UNION ALL\n"
+        + "(SELECT `B`\n"
+        + "FROM `T`\n"
+        + "FETCH NEXT 5 ROWS ONLY)";
+    sql(sql4).ok(expected4);
+
+    // as above, just FETCH and OFFSET
+    final String sql5 = "select a from t\n"
+        + "union all\n"
+        + "(select b from t offset 3 fetch next 5 rows only)";
+    final String expected5 = "SELECT `A`\n"
+        + "FROM `T`\n"
+        + "UNION ALL\n"
+        + "(SELECT `B`\n"
+        + "FROM `T`\n"
+        + "OFFSET 3 ROWS\n"
+        + "FETCH NEXT 5 ROWS ONLY)";
+    sql(sql5).ok(expected5);
+
+    // as previous, INTERSECT
+    final String sql6 = "select a from t\n"
+        + "intersect\n"
+        + "(select b from t offset 3 fetch next 5 rows only)";
+    final String expected6 = "SELECT `A`\n"
+        + "FROM `T`\n"
+        + "INTERSECT\n"
+        + "(SELECT `B`\n"
+        + "FROM `T`\n"
+        + "OFFSET 3 ROWS\n"
+        + "FETCH NEXT 5 ROWS ONLY)";
+    sql(sql6).ok(expected6);
+  }
+
+  @Test void testUnionIntersect() {
+    // Note that the union sub-query has parentheses.
+    final String sql = "(select * from a union select * from b)\n"
+        + "intersect select * from c";
+    final String expected = "(SELECT *\n"
+        + "FROM `A`\n"
+        + "UNION\n"
+        + "SELECT *\n"
+        + "FROM `B`)\n"
+        + "INTERSECT\n"
+        + "SELECT *\n"
+        + "FROM `C`";
+    sql(sql).ok(expected);
   }
 
   @Test void testUnionOfNonQueryFails() {
@@ -2600,23 +3100,23 @@ public class SqlParserTest {
 
   @Test void testExcept() {
     sql("select * from a except select * from a")
-        .ok("(SELECT *\n"
+        .ok("SELECT *\n"
             + "FROM `A`\n"
             + "EXCEPT\n"
             + "SELECT *\n"
-            + "FROM `A`)");
+            + "FROM `A`");
     sql("select * from a except all select * from a")
-        .ok("(SELECT *\n"
+        .ok("SELECT *\n"
             + "FROM `A`\n"
             + "EXCEPT ALL\n"
             + "SELECT *\n"
-            + "FROM `A`)");
+            + "FROM `A`");
     sql("select * from a except distinct select * from a")
-        .ok("(SELECT *\n"
+        .ok("SELECT *\n"
             + "FROM `A`\n"
             + "EXCEPT\n"
             + "SELECT *\n"
-            + "FROM `A`)");
+            + "FROM `A`");
   }
 
   /** Tests MINUS, which is equivalent to EXCEPT but only supported in some
@@ -2627,22 +3127,22 @@ public class SqlParserTest {
     final String sql = "select col1 from table1 ^MINUS^ select col1 from table2";
     sql(sql).fails(pattern);
 
-    final String expected = "(SELECT `COL1`\n"
+    final String expected = "SELECT `COL1`\n"
         + "FROM `TABLE1`\n"
         + "EXCEPT\n"
         + "SELECT `COL1`\n"
-        + "FROM `TABLE2`)";
+        + "FROM `TABLE2`";
     sql(sql)
         .withConformance(SqlConformanceEnum.ORACLE_10)
         .ok(expected);
 
     final String sql2 =
         "select col1 from table1 MINUS ALL select col1 from table2";
-    final String expected2 = "(SELECT `COL1`\n"
+    final String expected2 = "SELECT `COL1`\n"
         + "FROM `TABLE1`\n"
         + "EXCEPT ALL\n"
         + "SELECT `COL1`\n"
-        + "FROM `TABLE2`)";
+        + "FROM `TABLE2`";
     sql(sql2)
         .withConformance(SqlConformanceEnum.ORACLE_10)
         .ok(expected2);
@@ -2663,23 +3163,23 @@ public class SqlParserTest {
 
   @Test void testIntersect() {
     sql("select * from a intersect select * from a")
-        .ok("(SELECT *\n"
+        .ok("SELECT *\n"
             + "FROM `A`\n"
             + "INTERSECT\n"
             + "SELECT *\n"
-            + "FROM `A`)");
+            + "FROM `A`");
     sql("select * from a intersect all select * from a")
-        .ok("(SELECT *\n"
+        .ok("SELECT *\n"
             + "FROM `A`\n"
             + "INTERSECT ALL\n"
             + "SELECT *\n"
-            + "FROM `A`)");
+            + "FROM `A`");
     sql("select * from a intersect distinct select * from a")
-        .ok("(SELECT *\n"
+        .ok("SELECT *\n"
             + "FROM `A`\n"
             + "INTERSECT\n"
             + "SELECT *\n"
-            + "FROM `A`)");
+            + "FROM `A`");
   }
 
   @Test void testJoinCross() {
@@ -2769,7 +3269,7 @@ public class SqlParserTest {
   @Test void testFullInnerJoinFails() {
     // cannot have more than one of INNER, FULL, LEFT, RIGHT, CROSS
     sql("select * from a ^full^ inner join b")
-        .fails("(?s).*Encountered \"full inner\" at line 1, column 17.*");
+        .fails("(?s).*Encountered \"full inner\" at line .*");
   }
 
   @Test void testFullOuterJoin() {
@@ -2782,26 +3282,39 @@ public class SqlParserTest {
 
   @Test void testInnerOuterJoinFails() {
     sql("select * from a ^inner^ outer join b")
-        .fails("(?s).*Encountered \"inner outer\" at line 1, column 17.*");
+        .fails("(?s).*Encountered \"inner outer\" at line .*");
   }
 
-  @Disabled
   @Test void testJoinAssociativity() {
     // joins are left-associative
     // 1. no parens needed
+    String expected = "SELECT *\n"
+        + "FROM `A`\n"
+        + "NATURAL LEFT JOIN `B`\n"
+        + "LEFT JOIN `C` ON (`B`.`C1` = `C`.`C1`)";
     sql("select * from (a natural left join b) left join c on b.c1 = c.c1")
-        .ok("SELECT *\n"
-            + "FROM (`A` NATURAL LEFT JOIN `B`) LEFT JOIN `C` ON (`B`.`C1` = `C`.`C1`)\n");
+        .ok(expected);
 
     // 2. parens needed
+    String expected2 = "SELECT *\n"
+        + "FROM `A`\n"
+        + "NATURAL LEFT JOIN (`B` LEFT JOIN `C` ON (`B`.`C1` = `C`.`C1`))";
     sql("select * from a natural left join (b left join c on b.c1 = c.c1)")
-        .ok("SELECT *\n"
-            + "FROM (`A` NATURAL LEFT JOIN `B`) LEFT JOIN `C` ON (`B`.`C1` = `C`.`C1`)\n");
+        .ok(expected2);
 
     // 3. same as 1
     sql("select * from a natural left join b left join c on b.c1 = c.c1")
-        .ok("SELECT *\n"
-            + "FROM (`A` NATURAL LEFT JOIN `B`) LEFT JOIN `C` ON (`B`.`C1` = `C`.`C1`)\n");
+        .ok(expected);
+
+    // bushy
+    String sql4 = "select *\n"
+        + "from (a cross join b)\n"
+        + "cross join (c cross join d)";
+    String expected4 = "SELECT *\n"
+        + "FROM `A`\n"
+        + "CROSS JOIN `B`\n"
+        + "CROSS JOIN (`C` CROSS JOIN `D`)";
+    sql(sql4).ok(expected4);
   }
 
   // Note: "select * from a natural cross join b" is actually illegal SQL
@@ -2957,6 +3470,20 @@ public class SqlParserTest {
         + "tablesample bernoulli(50) REPEATABLE(-^100000000000000000000^) ")
         .fails("Literal '100000000000000000000' "
             + "can not be parsed to type 'java\\.lang\\.Integer'");
+
+    // test bernoulli sample percentage with zero.
+    final String sql4 = "select * "
+        + "from emp as x tablesample bernoulli(0)";
+    final String expected4 = "SELECT *\n"
+        + "FROM `EMP` AS `X` TABLESAMPLE BERNOULLI(0)";
+    sql(sql4).ok(expected4);
+
+    // test system sample percentage with zero.
+    final String sql5 = "select * "
+        + "from emp as x tablesample system(0)";
+    final String expected5 = "SELECT *\n"
+        + "FROM `EMP` AS `X` TABLESAMPLE SYSTEM(0)";
+    sql(sql5).ok(expected5);
   }
 
   @Test void testLiteral() {
@@ -2967,26 +3494,20 @@ public class SqlParserTest {
             + "FROM `EMP`");
 
     // Even though it looks like a date, it's just a string.
-    expr("'2004-06-01'")
-        .ok("'2004-06-01'");
+    expr("'2004-06-01'").same();
     expr("-.25")
         .ok("-0.25");
     expr("TIMESTAMP '2004-06-01 15:55:55'").same();
     expr("TIMESTAMP '2004-06-01 15:55:55.900'").same();
-    expr("TIMESTAMP '2004-06-01 15:55:55.1234'")
-        .ok("TIMESTAMP '2004-06-01 15:55:55.1234'");
-    expr("TIMESTAMP '2004-06-01 15:55:55.1236'")
-        .ok("TIMESTAMP '2004-06-01 15:55:55.1236'");
-    expr("TIMESTAMP '2004-06-01 15:55:55.9999'")
-        .ok("TIMESTAMP '2004-06-01 15:55:55.9999'");
+    expr("TIMESTAMP '2004-06-01 15:55:55.1234'").same();
+    expr("TIMESTAMP '2004-06-01 15:55:55.1236'").same();
+    expr("TIMESTAMP '2004-06-01 15:55:55.9999'").same();
     expr("NULL").same();
   }
 
   @Test void testContinuedLiteral() {
-    expr("'abba'\n'abba'")
-        .ok("'abba'\n'abba'");
-    expr("'abba'\n'0001'")
-        .ok("'abba'\n'0001'");
+    expr("'abba'\n'abba'").same();
+    expr("'abba'\n'0001'").same();
     expr("N'yabba'\n'dabba'\n'doo'")
         .ok("_ISO-8859-1'yabba'\n'dabba'\n'doo'");
     expr("_iso-8859-1'yabba'\n'dabba'\n'don''t'")
@@ -3066,7 +3587,6 @@ public class SqlParserTest {
   }
 
   @Test void testMixedFrom() {
-    // REVIEW: Is this syntax even valid?
     sql("select * from a join b using (x), c join d using (y)")
         .ok("SELECT *\n"
             + "FROM `A`\n"
@@ -3132,12 +3652,12 @@ public class SqlParserTest {
 
   @Test void testOrderInternal() {
     sql("(select * from emp order by empno) union select * from emp")
-        .ok("((SELECT *\n"
+        .ok("(SELECT *\n"
             + "FROM `EMP`\n"
             + "ORDER BY `EMPNO`)\n"
             + "UNION\n"
             + "SELECT *\n"
-            + "FROM `EMP`)");
+            + "FROM `EMP`");
 
     sql("select * from (select * from t order by x, y) where a = b")
         .ok("SELECT *\n"
@@ -3287,11 +3807,11 @@ public class SqlParserTest {
         + "union\n"
         + "select b from baz\n"
         + "limit 3";
-    final String expected5 = "(SELECT A\n"
+    final String expected5 = "SELECT A\n"
         + "FROM FOO\n"
         + "UNION\n"
         + "SELECT B\n"
-        + "FROM BAZ)\n"
+        + "FROM BAZ\n"
         + "LIMIT 3";
     sql(sql5).withDialect(SparkSqlDialect.DEFAULT).ok(expected5);
   }
@@ -3319,7 +3839,7 @@ public class SqlParserTest {
   @Test void testLimitStartCount() {
     final String error = "'LIMIT start, count' is not allowed under the "
         + "current SQL conformance level";
-    sql("select a from foo limit 1,^2^")
+    sql("select a from foo ^limit 1,2^")
         .withConformance(SqlConformanceEnum.DEFAULT)
         .fails(error);
 
@@ -3354,19 +3874,81 @@ public class SqlParserTest {
         .withConformance(SqlConformanceEnum.LENIENT)
         .ok(expected3);
 
-    // "fetch next 4" overrides the earlier "limit 3"
-    final String expected4 = "SELECT `A`\n"
+    // "fetch next 4" is invalid after "limit 3"
+    sql("select a from foo limit 2,3 ^fetch^ next 4 rows only")
+        .withConformance(SqlConformanceEnum.LENIENT)
+        .fails("(?s).*Encountered \"fetch\" at line 1.*");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5086">[CALCITE-5086]
+   * Calcite supports OFFSET start LIMIT count expression</a>. */
+  @Test void testOffsetStartLimitCount() {
+    final String error = "'OFFSET start LIMIT count' is not allowed under the "
+        + "current SQL conformance level";
+    sql("select a from foo order by b, c offset 1 limit 2")
+        .withConformance(SqlConformanceEnum.LENIENT)
+        .ok("SELECT `A`\n"
+            + "FROM `FOO`\n"
+            + "ORDER BY `B`, `C`\n"
+            + "OFFSET 1 ROWS\n"
+            + "FETCH NEXT 2 ROWS ONLY");
+
+    sql("select a from foo order by b, c ^offset 1 limit 2^")
+        .withConformance(SqlConformanceEnum.DEFAULT)
+        .fails(error);
+
+    // "limit 2" overrides the earlier "offset 4"
+    final String expected3 = "SELECT `A`\n"
         + "FROM `FOO`\n"
         + "OFFSET 2 ROWS\n"
-        + "FETCH NEXT 4 ROWS ONLY";
-    sql("select a from foo limit 2,3 fetch next 4 rows only")
+        + "FETCH NEXT 3 ROWS ONLY";
+    sql("select a from foo offset 4 limit 2,3")
         .withConformance(SqlConformanceEnum.LENIENT)
-        .ok(expected4);
+        .ok(expected3);
 
-    // "limit start, all" is not valid
-    sql("select a from foo limit 2, ^all^")
+    // "fetch next 4" is illegal following "limit 3"
+    sql("select a from foo offset 2 limit 3 ^fetch^ next 4 rows only")
         .withConformance(SqlConformanceEnum.LENIENT)
-        .fails("(?s).*Encountered \"all\" at line 1.*");
+        .fails("(?s).*Encountered \"fetch\" at line 1.*");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5184">[CALCITE-5184]
+   * Support "LIMIT start, ALL" (in MySQL conformance)</a>.
+   *
+   * @see SqlConformance#isLimitStartCountAllowed() */
+  @Test void testLimitStartAll() {
+    String expected = "SELECT `A`\n"
+        + "FROM `FOO`\n"
+        + "OFFSET 2 ROWS";
+    sql("select a from foo ^limit 2, all^")
+        .withConformance(SqlConformanceEnum.DEFAULT)
+        .fails("'LIMIT start, ALL' is not allowed under the "
+            + "current SQL conformance level")
+        .withConformance(SqlConformanceEnum.MYSQL_5)
+        .ok(expected)
+        .withConformance(SqlConformanceEnum.LENIENT)
+        .ok(expected);
+
+    // 'limit 2, all' will override 'offset 1' (if allowed by conformance)
+    sql("select a from foo ^offset 1 limit 2, all^")
+        .withConformance(SqlConformanceEnum.DEFAULT)
+        .fails("'LIMIT start, ALL' is not allowed under the "
+            + "current SQL conformance level")
+        .withConformance(SqlConformanceEnum.MYSQL_5)
+        .fails("'OFFSET start LIMIT count' is not allowed under the "
+            + "current SQL conformance level")
+        .withConformance(SqlConformanceEnum.LENIENT)
+        .ok(expected);
+
+    // 'offset 1' will override 'limit 2, all'
+    String expected2 = "SELECT `A`\n"
+        + "FROM `FOO`\n"
+        + "OFFSET 1 ROWS";
+    sql("select a from foo limit 2, all offset 1")
+        .withConformance(SqlConformanceEnum.LENIENT)
+        .ok(expected2);
   }
 
   @Test void testSqlInlineComment() {
@@ -3485,16 +4067,16 @@ public class SqlParserTest {
   // expressions
   @Test void testParseNumber() {
     // Exacts
-    expr("1").ok("1");
+    expr("1").same();
     expr("+1.").ok("1");
-    expr("-1").ok("-1");
+    expr("-1").same();
     expr("- -1").ok("1");
-    expr("1.0").ok("1.0");
-    expr("-3.2").ok("-3.2");
+    expr("1.0").same();
+    expr("-3.2").same();
     expr("1.").ok("1");
     expr(".1").ok("0.1");
-    expr("2500000000").ok("2500000000");
-    expr("5000000000").ok("5000000000");
+    expr("2500000000").same();
+    expr("5000000000").same();
 
     // Approximates
     expr("1e1").ok("1E1");
@@ -3573,26 +4155,26 @@ public class SqlParserTest {
         + "select * from e except "
         + "select * from f union "
         + "select * from g";
-    final String expected = "((((SELECT *\n"
+    final String expected = "SELECT *\n"
         + "FROM `A`\n"
         + "UNION\n"
-        + "((SELECT *\n"
+        + "SELECT *\n"
         + "FROM `B`\n"
         + "INTERSECT\n"
         + "SELECT *\n"
-        + "FROM `C`)\n"
+        + "FROM `C`\n"
         + "INTERSECT\n"
         + "SELECT *\n"
-        + "FROM `D`))\n"
+        + "FROM `D`\n"
         + "EXCEPT\n"
         + "SELECT *\n"
-        + "FROM `E`)\n"
+        + "FROM `E`\n"
         + "EXCEPT\n"
         + "SELECT *\n"
-        + "FROM `F`)\n"
+        + "FROM `F`\n"
         + "UNION\n"
         + "SELECT *\n"
-        + "FROM `G`)";
+        + "FROM `G`";
     sql(sql).ok(expected);
   }
 
@@ -3607,14 +4189,10 @@ public class SqlParserTest {
   }
 
   @Test void testQuotesInString() {
-    expr("'a''b'")
-        .ok("'a''b'");
-    expr("'''x'")
-        .ok("'''x'");
-    expr("''")
-        .ok("''");
-    expr("'Quoted strings aren''t \"hard\"'")
-        .ok("'Quoted strings aren''t \"hard\"'");
+    expr("'a''b'").same();
+    expr("'''x'").same();
+    expr("''").same();
+    expr("'Quoted strings aren''t \"hard\"'").same();
   }
 
   @Test void testScalarQueryInWhere() {
@@ -3739,8 +4317,17 @@ public class SqlParserTest {
   }
 
   @Test void testValues() {
+    final String expected = "VALUES (ROW(1, 'two'))";
+    final String pattern =
+        "VALUE is not allowed under the current SQL conformance level";
     sql("values(1,'two')")
-        .ok("VALUES (ROW(1, 'two'))");
+        .ok(expected);
+    sql("value(1,'two')")
+        .withConformance(SqlConformanceEnum.MYSQL_5)
+        .ok(expected)
+        .node(not(isDdl()));
+    sql("^value^(1,'two')")
+        .fails(pattern);
   }
 
   @Test void testValuesExplicitRow() {
@@ -3840,8 +4427,8 @@ public class SqlParserTest {
     sql("select * from table ^emp^")
         .fails("(?s).*Encountered \"emp\" at .*");
 
-    sql("select * from (table ^(^select empno from emp))")
-        .fails("(?s)Encountered \"\\(\".*");
+    sql("select * from (table (^select^ empno from emp))")
+        .fails("(?s)Encountered \"select\".*");
   }
 
   @Test void testCollectionTable() {
@@ -3898,8 +4485,8 @@ public class SqlParserTest {
     sql("select * from lateral table(ramp(1)) as t(x)")
         .ok(expected + " AS `T` (`X`)");
     // Bad: Parentheses make it look like a sub-query
-    sql("select * from lateral (table^(^ramp(1)))")
-        .fails("(?s)Encountered \"\\(\" at .*");
+    sql("select * from lateral (^table (ramp(1))^)")
+        .fails("Expected query or join");
 
     // Good: LATERAL (subQuery)
     final String expected2 = "SELECT *\n"
@@ -3985,6 +4572,95 @@ public class SqlParserTest {
     final String expected = "SELECT *\n"
         + "FROM LATERAL TABLE(`RAMP`(`DEPT`.`DEPTNO`)),\n"
         + "`DEPT`";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testTableFunction() {
+    final String sql = "select * from table(score(table orders))";
+    final String expected = "SELECT *\n"
+        + "FROM TABLE(`SCORE`((TABLE `ORDERS`)))";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testTableFunctionWithPartitionKey() {
+    // test one partition key for input table
+    final String sql = "select * from table(topn(table orders partition by productid, 3))";
+    final String expected = "SELECT *\n"
+        + "FROM TABLE(`TOPN`(((TABLE `ORDERS`) PARTITION BY `PRODUCTID`), 3))";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testTableFunctionWithMultiplePartitionKeys() {
+    // test multiple partition keys for input table
+    final String sql =
+        "select * from table(topn(table orders partition by (orderId, productid), 3))";
+    final String expected = "SELECT *\n"
+        + "FROM TABLE(`TOPN`(((TABLE `ORDERS`) PARTITION BY `ORDERID`, `PRODUCTID`), 3))";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testTableFunctionWithOrderKey() {
+    // test one order key for input table
+    final String sql =
+        "select * from table(topn(table orders order by orderId, 3))";
+    final String expected = "SELECT *\n"
+        + "FROM TABLE(`TOPN`(((TABLE `ORDERS`) ORDER BY `ORDERID`), 3))";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testTableFunctionWithMultipleOrderKeys() {
+    // test multiple order keys for input table
+    final String sql =
+        "select * from table(topn(table orders order by (orderId, productid), 3))";
+    final String expected = "SELECT *\n"
+        + "FROM TABLE(`TOPN`(((TABLE `ORDERS`) ORDER BY `ORDERID`, `PRODUCTID`), 3))";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testTableFunctionWithComplexOrderBy() {
+    // test complex order-by clause for input table
+    final String sql =
+        "select * from table(topn(table orders order by (orderId desc, productid asc), 3))";
+    final String expected = "SELECT *\n"
+        + "FROM TABLE(`TOPN`(((TABLE `ORDERS`) ORDER BY `ORDERID` DESC, `PRODUCTID`), 3))";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testTableFunctionWithPartitionKeyAndOrderKey() {
+    // test partition by clause and order by clause for input table
+    final String sql =
+        "select * from table(topn(table orders partition by productid order by orderId, 3))";
+    final String expected = "SELECT *\n"
+        + "FROM TABLE(`TOPN`(((TABLE `ORDERS`) PARTITION BY `PRODUCTID` ORDER BY `ORDERID`), 3))";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testTableFunctionWithSubQuery() {
+    // test partition by clause and order by clause for subquery
+    final String sql =
+        "select * from table(topn(select * from Orders partition by productid "
+            + "order by orderId, 3))";
+    final String expected = "SELECT *\n"
+        + "FROM TABLE(`TOPN`(((SELECT *\n"
+        + "FROM `ORDERS`) PARTITION BY `PRODUCTID` ORDER BY `ORDERID`), 3))";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testTableFunctionWithMultipleInputTables() {
+    final String sql = "select * from table(similarlity(table emp, table emp_b))";
+    final String expected = "SELECT *\n"
+        + "FROM TABLE(`SIMILARLITY`((TABLE `EMP`), (TABLE `EMP_B`)))";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testTableFunctionWithMultipleInputTablesAndSubClauses() {
+    final String sql = "select * from table("
+        + "similarlity("
+        + "  table emp partition by deptno order by empno, "
+        + "  table emp_b partition by deptno order by empno))";
+    final String expected = "SELECT *\n"
+        + "FROM TABLE(`SIMILARLITY`(((TABLE `EMP`) PARTITION BY `DEPTNO` ORDER BY `EMPNO`), "
+        + "((TABLE `EMP_B`) PARTITION BY `DEPTNO` ORDER BY `EMPNO`)))";
     sql(sql).ok(expected);
   }
 
@@ -4120,11 +4796,11 @@ public class SqlParserTest {
     sql("describe statement (select * from emps)").ok(expected0);
     final String expected2 = ""
         + "EXPLAIN PLAN INCLUDING ATTRIBUTES WITH IMPLEMENTATION FOR\n"
-        + "(SELECT `DEPTNO`\n"
+        + "SELECT `DEPTNO`\n"
         + "FROM `EMPS`\n"
         + "UNION\n"
         + "SELECT `DEPTNO`\n"
-        + "FROM `DEPTS`)";
+        + "FROM `DEPTS`";
     sql("describe select deptno from emps union select deptno from depts").ok(expected2);
     final String expected3 = ""
         + "EXPLAIN PLAN INCLUDING ATTRIBUTES WITH IMPLEMENTATION FOR\n"
@@ -4145,8 +4821,8 @@ public class SqlParserTest {
 
   @Test void testInsertSelect() {
     final String expected = "INSERT INTO `EMPS`\n"
-        + "(SELECT *\n"
-        + "FROM `EMPS`)";
+        + "SELECT *\n"
+        + "FROM `EMPS`";
     sql("insert into emps select * from emps")
         .ok(expected)
         .node(not(isDdl()));
@@ -4154,11 +4830,11 @@ public class SqlParserTest {
 
   @Test void testInsertUnion() {
     final String expected = "INSERT INTO `EMPS`\n"
-        + "(SELECT *\n"
+        + "SELECT *\n"
         + "FROM `EMPS1`\n"
         + "UNION\n"
         + "SELECT *\n"
-        + "FROM `EMPS2`)";
+        + "FROM `EMPS2`";
     sql("insert into emps select * from emps1 union select * from emps2")
         .ok(expected);
   }
@@ -4166,9 +4842,17 @@ public class SqlParserTest {
   @Test void testInsertValues() {
     final String expected = "INSERT INTO `EMPS`\n"
         + "VALUES (ROW(1, 'Fredkin'))";
+    final String pattern =
+        "VALUE is not allowed under the current SQL conformance level";
     sql("insert into emps values (1,'Fredkin')")
         .ok(expected)
         .node(not(isDdl()));
+    sql("insert into emps value (1, 'Fredkin')")
+        .withConformance(SqlConformanceEnum.MYSQL_5)
+        .ok(expected)
+        .node(not(isDdl()));
+    sql("insert into emps ^value^ (1, 'Fredkin')")
+        .fails(pattern);
   }
 
   @Test void testInsertValuesDefault() {
@@ -4191,29 +4875,29 @@ public class SqlParserTest {
 
   @Test void testInsertColumnList() {
     final String expected = "INSERT INTO `EMPS` (`X`, `Y`)\n"
-        + "(SELECT *\n"
-        + "FROM `EMPS`)";
+        + "SELECT *\n"
+        + "FROM `EMPS`";
     sql("insert into emps(x,y) select * from emps")
         .ok(expected);
   }
 
   @Test void testInsertCaseSensitiveColumnList() {
     final String expected = "INSERT INTO `emps` (`x`, `y`)\n"
-        + "(SELECT *\n"
-        + "FROM `EMPS`)";
+        + "SELECT *\n"
+        + "FROM `EMPS`";
     sql("insert into \"emps\"(\"x\",\"y\") select * from emps")
         .ok(expected);
   }
 
   @Test void testInsertExtendedColumnList() {
     String expected = "INSERT INTO `EMPS` EXTEND (`Z` BOOLEAN) (`X`, `Y`)\n"
-        + "(SELECT *\n"
-        + "FROM `EMPS`)";
+        + "SELECT *\n"
+        + "FROM `EMPS`";
     sql("insert into emps(z boolean)(x,y) select * from emps")
         .ok(expected);
     expected = "INSERT INTO `EMPS` EXTEND (`Z` BOOLEAN) (`X`, `Y`, `Z`)\n"
-        + "(SELECT *\n"
-        + "FROM `EMPS`)";
+        + "SELECT *\n"
+        + "FROM `EMPS`";
     sql("insert into emps(x, y, z boolean) select * from emps")
         .withConformance(SqlConformanceEnum.LENIENT)
         .ok(expected);
@@ -4250,13 +4934,13 @@ public class SqlParserTest {
 
   @Test void testInsertCaseSensitiveExtendedColumnList() {
     String expected = "INSERT INTO `emps` EXTEND (`z` BOOLEAN) (`x`, `y`)\n"
-        + "(SELECT *\n"
-        + "FROM `EMPS`)";
+        + "SELECT *\n"
+        + "FROM `EMPS`";
     sql("insert into \"emps\"(\"z\" boolean)(\"x\",\"y\") select * from emps")
         .ok(expected);
     expected = "INSERT INTO `emps` EXTEND (`z` BOOLEAN) (`x`, `y`, `z`)\n"
-        + "(SELECT *\n"
-        + "FROM `EMPS`)";
+        + "SELECT *\n"
+        + "FROM `EMPS`";
     sql("insert into \"emps\"(\"x\", \"y\", \"z\" boolean) select * from emps")
         .withConformance(SqlConformanceEnum.LENIENT)
         .ok(expected);
@@ -4266,8 +4950,8 @@ public class SqlParserTest {
     final String expected = "EXPLAIN PLAN INCLUDING ATTRIBUTES"
         + " WITH IMPLEMENTATION FOR\n"
         + "INSERT INTO `EMPS1`\n"
-        + "(SELECT *\n"
-        + "FROM `EMPS2`)";
+        + "SELECT *\n"
+        + "FROM `EMPS2`";
     sql("explain plan for insert into emps1 select * from emps2")
         .ok(expected)
         .node(not(isDdl()));
@@ -4287,8 +4971,8 @@ public class SqlParserTest {
   @Test void testUpsertSelect() {
     final String sql = "upsert into emps select * from emp as e";
     final String expected = "UPSERT INTO `EMPS`\n"
-        + "(SELECT *\n"
-        + "FROM `EMP` AS `E`)";
+        + "SELECT *\n"
+        + "FROM `EMP` AS `E`";
     if (isReserved("UPSERT")) {
       sql(sql).ok(expected);
     }
@@ -4341,7 +5025,7 @@ public class SqlParserTest {
         + ", `DEPTNO` = `T`.`DEPTNO`"
         + ", `SALARY` = (`T`.`SALARY` * 0.1)\n"
         + "WHEN NOT MATCHED THEN INSERT (`NAME`, `DEPT`, `SALARY`) "
-        + "(VALUES (ROW(`T`.`NAME`, 10, (`T`.`SALARY` * 0.15))))";
+        + "VALUES (ROW(`T`.`NAME`, 10, (`T`.`SALARY` * 0.15)))";
     sql(sql).ok(expected)
         .node(not(isDdl()));
   }
@@ -4364,7 +5048,7 @@ public class SqlParserTest {
         + ", `E`.`DEPTNO` = `T`.`DEPTNO`"
         + ", `E`.`SALARY` = (`T`.`SALARY` * 0.1)\n"
         + "WHEN NOT MATCHED THEN INSERT (`NAME`, `DEPT`, `SALARY`) "
-        + "(VALUES (ROW(`T`.`NAME`, 10, (`T`.`SALARY` * 0.15))))";
+        + "VALUES (ROW(`T`.`NAME`, 10, (`T`.`SALARY` * 0.15)))";
     sql(sql).ok(expected)
         .node(not(isDdl()));
   }
@@ -4384,7 +5068,7 @@ public class SqlParserTest {
         + ", `DEPTNO` = `T`.`DEPTNO`"
         + ", `SALARY` = (`T`.`SALARY` * 0.1)\n"
         + "WHEN NOT MATCHED THEN INSERT (`NAME`, `DEPT`, `SALARY`) "
-        + "(VALUES (ROW(`T`.`NAME`, 10, (`T`.`SALARY` * 0.15))))";
+        + "VALUES (ROW(`T`.`NAME`, 10, (`T`.`SALARY` * 0.15)))";
     sql(sql).ok(expected);
   }
 
@@ -4404,8 +5088,42 @@ public class SqlParserTest {
         + ", `E`.`DEPTNO` = `T`.`DEPTNO`"
         + ", `E`.`SALARY` = (`T`.`SALARY` * 0.1)\n"
         + "WHEN NOT MATCHED THEN INSERT (`NAME`, `DEPT`, `SALARY`) "
-        + "(VALUES (ROW(`T`.`NAME`, 10, (`T`.`SALARY` * 0.15))))";
+        + "VALUES (ROW(`T`.`NAME`, 10, (`T`.`SALARY` * 0.15)))";
     sql(sql).ok(expected);
+  }
+
+  @Test void testMergeMismatchedParentheses() {
+    // Invalid; more '(' than ')'
+    final String sql1 = "merge into emps as e\n"
+        + "using temps as t on e.empno = t.empno\n"
+        + "when not matched\n"
+        + "then insert (a, b) (values (1, 2^)^";
+    sql(sql1).fails("(?s)Encountered \"<EOF>\" at .*");
+
+    // Invalid; more ')' than '('
+    final String sql1b = "merge into emps as e\n"
+        + "using temps as t on e.empno = t.empno\n"
+        + "when not matched\n"
+        + "then insert (a, b) values (1, 2)^)^";
+    sql(sql1b).fails("(?s)Encountered \"\\)\" at .*");
+
+    // As sql1, with extra ')', therefore valid
+    final String sql2 = "merge into emps as e\n"
+        + "using temps as t on e.empno = t.empno\n"
+        + "when not matched\n"
+        + "then insert (a, b) (values (1, 2))";
+    final String expected = "MERGE INTO `EMPS` AS `E`\n"
+        + "USING `TEMPS` AS `T`\n"
+        + "ON (`E`.`EMPNO` = `T`.`EMPNO`)\n"
+        + "WHEN NOT MATCHED THEN INSERT (`A`, `B`) VALUES (ROW(1, 2))";
+    sql(sql2).ok(expected);
+
+    // As sql1, removing unmatched '(', therefore valid
+    final String sql3 = "merge into emps as e\n"
+        + "using temps as t on e.empno = t.empno\n"
+        + "when not matched\n"
+        + "then insert (a, b) values (1, 2)";
+    sql(sql3).ok(expected);
   }
 
   @Test void testBitStringNotImplemented() {
@@ -4457,12 +5175,10 @@ public class SqlParserTest {
         .ok("_ISO-8859-1'is it a plane? no it''s superman!'");
     expr("n'lowercase n'")
         .ok("_ISO-8859-1'lowercase n'");
-    expr("'boring string'")
-        .ok("'boring string'");
+    expr("'boring string'").same();
     expr("_iSo-8859-1'bye'")
         .ok("_ISO-8859-1'bye'");
-    expr("'three'\n' blind'\n' mice'")
-        .ok("'three'\n' blind'\n' mice'");
+    expr("'three'\n' blind'\n' mice'").same();
     expr("'three' -- comment\n' blind'\n' mice'")
         .ok("'three'\n' blind'\n' mice'");
     expr("N'bye' \t\r\f\f\n' bye'")
@@ -4473,15 +5189,13 @@ public class SqlParserTest {
         .ok("_UTF8'hi'");
 
     // newline in string literal
-    expr("'foo\rbar'")
-        .ok("'foo\rbar'");
-    expr("'foo\nbar'")
-        .ok("'foo\nbar'");
+    expr("'foo\rbar'").same();
+    expr("'foo\nbar'").same();
 
     expr("'foo\r\nbar'")
         // prevent test infrastructure from converting '\r\n' to '\n'
         .withConvertToLinux(false)
-        .ok("'foo\r\nbar'");
+        .same();
   }
 
   @Test void testStringLiteralFails() {
@@ -4570,7 +5284,8 @@ public class SqlParserTest {
     };
   }
 
-  @Test void testCaseExpression() {
+  @VisibleForTesting
+  @Test public void testCaseExpression() {
     // implicit simple "ELSE NULL" case
     expr("case \t col1 when 1 then 'one' end")
         .ok("(CASE WHEN (`COL1` = 1) THEN 'one' ELSE NULL END)");
@@ -4614,6 +5329,18 @@ public class SqlParserTest {
     // Wrong 'WHEN'
     sql("select case col1 ^when1^ then 'one' end from t")
         .fails("(?s).*when1.*");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-4802">[CALCITE-4802]
+   * Babel parser doesn't parse IF(condition, then, else) statements </a>.
+   */
+  @Test void testIf() {
+    expr("if(true, 1, 0)")
+        .ok("`IF`(TRUE, 1, 0)");
+
+    sql("select 1 as if")
+        .ok("SELECT 1 AS `IF`");
   }
 
   @Test void testNullIf() {
@@ -4690,104 +5417,119 @@ public class SqlParserTest {
     sql("select interval '5:6' hour to minute from t").ok(expected4);
   }
 
+  /** Tests that on BigQuery, DATE, TIME and TIMESTAMP literals can use
+   * single- or double-quoted strings. */
+  @Test void testDateLiteralBigQuery() {
+    final SqlParserFixture f = fixture().withDialect(BIG_QUERY);
+    f.sql("select date '2020-10-10'")
+        .ok("SELECT DATE '2020-10-10'");
+    f.sql("select date\"2020-10-10\"")
+        .ok("SELECT DATE '2020-10-10'");
+    f.sql("select timestamp '2018-02-17 13:22:04'")
+        .ok("SELECT TIMESTAMP '2018-02-17 13:22:04'");
+    f.sql("select timestamp \"2018-02-17 13:22:04\"")
+        .ok("SELECT TIMESTAMP '2018-02-17 13:22:04'");
+    f.sql("select time '13:22:04'")
+        .ok("SELECT TIME '13:22:04'");
+    f.sql("select time \"13:22:04\"")
+        .ok("SELECT TIME '13:22:04'");
+  }
+
+  @Test void testIntervalLiteralBigQuery() {
+    final SqlParserFixture f = fixture().withDialect(BIG_QUERY)
+        .expression(true);
+    f.sql("interval '1' day")
+        .ok("INTERVAL '1' DAY");
+    f.sql("interval \"1\" day")
+        .ok("INTERVAL '1' DAY");
+    f.sql("interval '1:2:3' hour to second")
+        .ok("INTERVAL '1:2:3' HOUR TO SECOND");
+    f.sql("interval \"1:2:3\" hour to second")
+        .ok("INTERVAL '1:2:3' HOUR TO SECOND");
+  }
+
   // check date/time functions.
   @Test void testTimeDate() {
     // CURRENT_TIME - returns time w/ timezone
-    expr("CURRENT_TIME(3)")
-        .ok("CURRENT_TIME(3)");
+    expr("CURRENT_TIME(3)").same();
 
     // checkFails("SELECT CURRENT_TIME() FROM foo",
     //     "SELECT CURRENT_TIME() FROM `FOO`");
 
-    expr("CURRENT_TIME")
-        .ok("CURRENT_TIME");
+    expr("CURRENT_TIME").same();
     expr("CURRENT_TIME(x+y)")
         .ok("CURRENT_TIME((`X` + `Y`))");
 
     // LOCALTIME returns time w/o TZ
-    expr("LOCALTIME(3)")
-        .ok("LOCALTIME(3)");
+    expr("LOCALTIME(3)").same();
 
     // checkFails("SELECT LOCALTIME() FROM foo",
     //     "SELECT LOCALTIME() FROM `FOO`");
 
-    expr("LOCALTIME")
-        .ok("LOCALTIME");
+    expr("LOCALTIME").same();
     expr("LOCALTIME(x+y)")
         .ok("LOCALTIME((`X` + `Y`))");
 
     // LOCALTIMESTAMP - returns timestamp w/o TZ
-    expr("LOCALTIMESTAMP(3)")
-        .ok("LOCALTIMESTAMP(3)");
+    expr("LOCALTIMESTAMP(3)").same();
 
     // checkFails("SELECT LOCALTIMESTAMP() FROM foo",
     //     "SELECT LOCALTIMESTAMP() FROM `FOO`");
 
-    expr("LOCALTIMESTAMP")
-        .ok("LOCALTIMESTAMP");
+    expr("LOCALTIMESTAMP").same();
     expr("LOCALTIMESTAMP(x+y)")
         .ok("LOCALTIMESTAMP((`X` + `Y`))");
 
     // CURRENT_DATE - returns DATE
-    expr("CURRENT_DATE(3)")
-        .ok("CURRENT_DATE(3)");
+    expr("CURRENT_DATE(3)").same();
 
     // checkFails("SELECT CURRENT_DATE() FROM foo",
     //     "SELECT CURRENT_DATE() FROM `FOO`");
-    expr("CURRENT_DATE")
-        .ok("CURRENT_DATE");
+    expr("CURRENT_DATE").same();
 
     // checkFails("SELECT CURRENT_DATE(x+y) FROM foo",
     //     "CURRENT_DATE((`X` + `Y`))");
 
     // CURRENT_TIMESTAMP - returns timestamp w/ TZ
-    expr("CURRENT_TIMESTAMP(3)")
-        .ok("CURRENT_TIMESTAMP(3)");
+    expr("CURRENT_TIMESTAMP(3)").same();
 
     // checkFails("SELECT CURRENT_TIMESTAMP() FROM foo",
     //     "SELECT CURRENT_TIMESTAMP() FROM `FOO`");
 
-    expr("CURRENT_TIMESTAMP")
-        .ok("CURRENT_TIMESTAMP");
+    expr("CURRENT_TIMESTAMP").same();
     expr("CURRENT_TIMESTAMP(x+y)")
         .ok("CURRENT_TIMESTAMP((`X` + `Y`))");
 
     // Date literals
-    expr("DATE '2004-12-01'")
-        .ok("DATE '2004-12-01'");
+    expr("DATE '2004-12-01'").same();
 
     // Time literals
-    expr("TIME '12:01:01'")
-        .ok("TIME '12:01:01'");
-    expr("TIME '12:01:01.'")
-        .ok("TIME '12:01:01'");
-    expr("TIME '12:01:01.000'")
-        .ok("TIME '12:01:01.000'");
-    expr("TIME '12:01:01.001'")
-        .ok("TIME '12:01:01.001'");
-    expr("TIME '12:01:01.01023456789'")
-        .ok("TIME '12:01:01.01023456789'");
+    expr("TIME '12:01:01'").same();
+    expr("TIME '12:01:01.'").same();
+    expr("TIME '12:01:01.000'").same();
+    expr("TIME '12:01:01.001'").same();
+    expr("TIME '12:01:01.01023456789'").same();
 
     // Timestamp literals
-    expr("TIMESTAMP '2004-12-01 12:01:01'")
-        .ok("TIMESTAMP '2004-12-01 12:01:01'");
-    expr("TIMESTAMP '2004-12-01 12:01:01.1'")
-        .ok("TIMESTAMP '2004-12-01 12:01:01.1'");
-    expr("TIMESTAMP '2004-12-01 12:01:01.'")
-        .ok("TIMESTAMP '2004-12-01 12:01:01'");
+    expr("TIMESTAMP '2004-12-01 12:01:01'").same();
+    expr("TIMESTAMP '2004-12-01 12:01:01.1'").same();
+    expr("TIMESTAMP '2004-12-01 12:01:01.'").same();
     expr("TIMESTAMP  '2004-12-01 12:01:01.010234567890'")
         .ok("TIMESTAMP '2004-12-01 12:01:01.010234567890'");
     expr("TIMESTAMP '2004-12-01 12:01:01.01023456789'").same();
 
-    // Failures.
-    sql("^DATE '12/21/99'^")
-        .fails("(?s).*Illegal DATE literal.*");
-    sql("^TIME '1230:33'^")
-        .fails("(?s).*Illegal TIME literal.*");
-    sql("^TIME '12:00:00 PM'^")
-        .fails("(?s).*Illegal TIME literal.*");
-    sql("^TIMESTAMP '12-21-99, 12:30:00'^")
-        .fails("(?s).*Illegal TIMESTAMP literal.*");
+    // Datetime, Timestamp with local time zone literals.
+    expr("DATETIME '2004-12-01 12:01:01'")
+        .same();
+
+    // Value strings that are illegal for their type are considered valid at
+    // parse time, invalid at validate time. See SqlValidatorTest.testLiteral.
+    expr("^DATE '12/21/99'^").same();
+    expr("^TIME '1230:33'^").same();
+    expr("^TIME '12:00:00 PM'^").same();
+    expr("TIMESTAMP '12-21-99, 12:30:00'").same();
+    expr("TIMESTAMP WITH LOCAL TIME ZONE '12-21-99, 12:30:00'").same();
+    expr("DATETIME '12-21-99, 12:30:00'").same();
   }
 
   /**
@@ -4796,10 +5538,8 @@ public class SqlParserTest {
   @Test void testDateTimeCast() {
     //   checkExp("CAST(DATE '2001-12-21' AS CHARACTER VARYING)",
     // "CAST(2001-12-21)");
-    expr("CAST('2001-12-21' AS DATE)")
-        .ok("CAST('2001-12-21' AS DATE)");
-    expr("CAST(12 AS DATE)")
-        .ok("CAST(12 AS DATE)");
+    expr("CAST('2001-12-21' AS DATE)").same();
+    expr("CAST(12 AS DATE)").same();
     sql("CAST('2000-12-21' AS DATE ^NOT^ NULL)")
         .fails("(?s).*Encountered \"NOT\" at line 1, column 27.*");
     sql("CAST('foo' as ^1^)")
@@ -4831,10 +5571,32 @@ public class SqlParserTest {
   }
 
   @Test void testConvertAndTranslate() {
-    expr("convert('abc' using conversion)")
-        .ok("CONVERT('abc' USING `CONVERSION`)");
+    expr("convert('abc', utf8, utf16)")
+        .ok("CONVERT('abc', `UTF8`, `UTF16`)");
+    sql("select convert(name, latin1, gbk) as newName from t")
+        .ok("SELECT CONVERT(`NAME`, `LATIN1`, `GBK`) AS `NEWNAME`\n"
+            + "FROM `T`");
+
+    expr("convert('abc' using utf8)")
+        .ok("TRANSLATE('abc' USING `UTF8`)");
+    sql("select convert(name using gbk) as newName from t")
+        .ok("SELECT TRANSLATE(`NAME` USING `GBK`) AS `NEWNAME`\n"
+            + "FROM `T`");
+
     expr("translate('abc' using lazy_translation)")
         .ok("TRANSLATE('abc' USING `LAZY_TRANSLATION`)");
+    sql("select translate(name using utf8) as newName from t")
+        .ok("SELECT TRANSLATE(`NAME` USING `UTF8`) AS `NEWNAME`\n"
+            + "FROM `T`");
+
+    // Test case for <a href="https://issues.apache.org/jira/browse/CALCITE-5996">[CALCITE-5996]</a>
+    // TRANSLATE operator is incorrectly unparsed
+    sql("select translate(col using utf8)\n"
+        + "from (select 'a' as col\n"
+        + " from (values(true)))\n")
+        .ok("SELECT TRANSLATE(`COL` USING `UTF8`)\n"
+            + "FROM (SELECT 'a' AS `COL`\n"
+            + "FROM (VALUES (ROW(TRUE))))");
   }
 
   @Test void testTranslate3() {
@@ -4994,6 +5756,72 @@ public class SqlParserTest {
     sql("select sum(x) over (order by x) from bids")
         .ok("SELECT (SUM(`X`) OVER (ORDER BY `X`))\n"
             + "FROM `BIDS`");
+  }
+
+  @Test void testQualify() {
+    final String sql = "SELECT empno, ename,\n"
+        + " ROW_NUMBER() over (partition by ename order by deptno) as rn\n"
+        + "FROM emp\n"
+        + "QUALIFY rn = 1";
+    final String expected = "SELECT `EMPNO`, `ENAME`,"
+        + " (ROW_NUMBER() OVER (PARTITION BY `ENAME` ORDER BY `DEPTNO`)) AS `RN`\n"
+        + "FROM `EMP`\n"
+        + "QUALIFY (`RN` = 1)";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testQualifyWithoutAlias() {
+    final String sql = "SELECT empno, ename\n"
+        + "FROM emp\n"
+        + "QUALIFY ROW_NUMBER() over (partition by ename order by deptno) = 1";
+    final String expected = "SELECT `EMPNO`, `ENAME`\n"
+        + "FROM `EMP`\n"
+        + "QUALIFY ((ROW_NUMBER() OVER (PARTITION BY `ENAME` ORDER BY `DEPTNO`)) = 1)";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testQualifyWithWindowClause() {
+    final String sql = "SELECT empno, ename,\n"
+        + " SUM(deptno) OVER myWindow as sumDeptNo\n"
+        + "FROM emp\n"
+        + "WINDOW myWindow AS (PARTITION BY ename ORDER BY empno)\n"
+        + "QUALIFY sumDeptNo = 1";
+    final String expected = "SELECT `EMPNO`, `ENAME`,"
+        + " (SUM(`DEPTNO`) OVER `MYWINDOW`) AS `SUMDEPTNO`\n"
+        + "FROM `EMP`\n"
+        + "WINDOW `MYWINDOW` AS (PARTITION BY `ENAME` ORDER BY `EMPNO`)\n"
+        + "QUALIFY (`SUMDEPTNO` = 1)";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testQualifyWithEverything() {
+    final String sql = "SELECT DISTINCT ename,\n"
+        + " SUM(deptno) OVER (PARTITION BY ename) as r\n"
+        + "FROM emp\n"
+        + "WHERE deptno > 3\n"
+        + "GROUP BY ename, deptno\n"
+        + "HAVING SUM(empno) > 4\n"
+        + "QUALIFY sumDeptNo = 1\n"
+        + "ORDER BY ename\n"
+        + "LIMIT 5\n";
+    final String expected = "SELECT DISTINCT `ENAME`,"
+        + " (SUM(`DEPTNO`) OVER (PARTITION BY `ENAME`)) AS `R`\n"
+        + "FROM `EMP`\n"
+        + "WHERE (`DEPTNO` > 3)\n"
+        + "GROUP BY `ENAME`, `DEPTNO`\n"
+        + "HAVING (SUM(`EMPNO`) > 4)\n"
+        + "QUALIFY (`SUMDEPTNO` = 1)\n"
+        + "ORDER BY `ENAME`\n"
+        + "FETCH NEXT 5 ROWS ONLY";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testQualifyIllegalAfterOrder() {
+    final String sql = "SELECT x\n"
+        + "FROM t\n"
+        + "ORDER BY 1 DESC\n"
+        + "^QUALIFY^ x = 1";
+    sql(sql).fails("(?s).*Encountered \"QUALIFY\" at .*");
   }
 
   @Test void testNullTreatment() {
@@ -5277,6 +6105,25 @@ public class SqlParserTest {
         .ok("(ARRAY[(ROW(1, 'a')), (ROW(2, 'b'))])");
   }
 
+  @Test void testArrayFunction() {
+    expr("array()").ok("ARRAY()");
+    expr("array(1)").ok("ARRAY(1)");
+  }
+
+  @Test void testArrayQueryConstructor() {
+    sql("SELECT array(SELECT x FROM (VALUES(1)) x)")
+        .ok("SELECT (ARRAY ((SELECT `X`\n"
+            + "FROM (VALUES (ROW(1))) AS `X`)))");
+    sql("SELECT array(SELECT x FROM (VALUES(1)) x ORDER BY x)")
+        .ok("SELECT (ARRAY (SELECT `X`\n"
+            + "FROM (VALUES (ROW(1))) AS `X`\n"
+            + "ORDER BY `X`))");
+    sql("SELECT array(SELECT x FROM (VALUES(1)) x, ^SELECT^ x FROM (VALUES(1)) x)")
+      .fails("(?s)Incorrect syntax near the keyword 'SELECT' at.*");
+    sql("SELECT array(1, ^SELECT^ x FROM (VALUES(1)) x)")
+      .fails("(?s)Incorrect syntax near the keyword 'SELECT'.*");
+  }
+
   @Test void testCastAsCollectionType() {
     // test array type.
     expr("cast(a as int array)")
@@ -5328,6 +6175,20 @@ public class SqlParserTest {
         .ok("CAST(`A` AS ROW(`F0` VARCHAR, `F1` TIMESTAMP NULL) MULTISET)");
   }
 
+  /**
+   * Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5570">[CALCITE-5570]
+   * Support nested map type for SqlDataTypeSpec</a>.
+   */
+  @Test void testCastAsMapType() {
+    expr("cast(a as map<int, int>)")
+        .ok("CAST(`A` AS MAP< INTEGER, INTEGER >)");
+    expr("cast(a as map<int, varchar array>)")
+        .ok("CAST(`A` AS MAP< INTEGER, VARCHAR ARRAY >)");
+    expr("cast(a as map<varchar multiset, map<int, int>>)")
+        .ok("CAST(`A` AS MAP< VARCHAR MULTISET, MAP< INTEGER, INTEGER > >)");
+  }
+
   @Test void testMapValueConstructor() {
     expr("map[1, 'x', 2, 'y']")
         .ok("(MAP[1, 'x', 2, 'y'])");
@@ -5337,964 +6198,39 @@ public class SqlParserTest {
         .ok("(MAP[])");
   }
 
-  /**
-   * Runs tests for INTERVAL... YEAR that should pass both parser and
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXPositive() tests.
-   */
-  public void subTestIntervalYearPositive() {
-    // default precision
-    expr("interval '1' year")
-        .ok("INTERVAL '1' YEAR");
-    expr("interval '99' year")
-        .ok("INTERVAL '99' YEAR");
-
-    // explicit precision equal to default
-    expr("interval '1' year(2)")
-        .ok("INTERVAL '1' YEAR(2)");
-    expr("interval '99' year(2)")
-        .ok("INTERVAL '99' YEAR(2)");
-
-    // max precision
-    expr("interval '2147483647' year(10)")
-        .ok("INTERVAL '2147483647' YEAR(10)");
-
-    // min precision
-    expr("interval '0' year(1)")
-        .ok("INTERVAL '0' YEAR(1)");
-
-    // alternate precision
-    expr("interval '1234' year(4)")
-        .ok("INTERVAL '1234' YEAR(4)");
-
-    // sign
-    expr("interval '+1' year")
-        .ok("INTERVAL '+1' YEAR");
-    expr("interval '-1' year")
-        .ok("INTERVAL '-1' YEAR");
-    expr("interval +'1' year")
-        .ok("INTERVAL '1' YEAR");
-    expr("interval +'+1' year")
-        .ok("INTERVAL '+1' YEAR");
-    expr("interval +'-1' year")
-        .ok("INTERVAL '-1' YEAR");
-    expr("interval -'1' year")
-        .ok("INTERVAL -'1' YEAR");
-    expr("interval -'+1' year")
-        .ok("INTERVAL -'+1' YEAR");
-    expr("interval -'-1' year")
-        .ok("INTERVAL -'-1' YEAR");
+  @Test void testMapFunction() {
+    expr("map()").ok("MAP()");
+    expr("MAP()").same();
+    // parser allows odd elements; validator will reject it
+    expr("map(1)").ok("MAP(1)");
+    expr("map(1, 'x', 2, 'y')")
+        .ok("MAP(1, 'x', 2, 'y')");
+    // with upper case
+    expr("MAP(1, 'x', 2, 'y')").same();
+    // with space
+    expr("map (1, 'x', 2, 'y')")
+        .ok("MAP(1, 'x', 2, 'y')");
   }
 
-  /**
-   * Runs tests for INTERVAL... YEAR TO MONTH that should pass both parser and
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXPositive() tests.
-   */
-  public void subTestIntervalYearToMonthPositive() {
-    // default precision
-    expr("interval '1-2' year to month")
-        .ok("INTERVAL '1-2' YEAR TO MONTH");
-    expr("interval '99-11' year to month")
-        .ok("INTERVAL '99-11' YEAR TO MONTH");
-    expr("interval '99-0' year to month")
-        .ok("INTERVAL '99-0' YEAR TO MONTH");
-
-    // explicit precision equal to default
-    expr("interval '1-2' year(2) to month")
-        .ok("INTERVAL '1-2' YEAR(2) TO MONTH");
-    expr("interval '99-11' year(2) to month")
-        .ok("INTERVAL '99-11' YEAR(2) TO MONTH");
-    expr("interval '99-0' year(2) to month")
-        .ok("INTERVAL '99-0' YEAR(2) TO MONTH");
-
-    // max precision
-    expr("interval '2147483647-11' year(10) to month")
-        .ok("INTERVAL '2147483647-11' YEAR(10) TO MONTH");
-
-    // min precision
-    expr("interval '0-0' year(1) to month")
-        .ok("INTERVAL '0-0' YEAR(1) TO MONTH");
-
-    // alternate precision
-    expr("interval '2006-2' year(4) to month")
-        .ok("INTERVAL '2006-2' YEAR(4) TO MONTH");
-
-    // sign
-    expr("interval '-1-2' year to month")
-        .ok("INTERVAL '-1-2' YEAR TO MONTH");
-    expr("interval '+1-2' year to month")
-        .ok("INTERVAL '+1-2' YEAR TO MONTH");
-    expr("interval +'1-2' year to month")
-        .ok("INTERVAL '1-2' YEAR TO MONTH");
-    expr("interval +'-1-2' year to month")
-        .ok("INTERVAL '-1-2' YEAR TO MONTH");
-    expr("interval +'+1-2' year to month")
-        .ok("INTERVAL '+1-2' YEAR TO MONTH");
-    expr("interval -'1-2' year to month")
-        .ok("INTERVAL -'1-2' YEAR TO MONTH");
-    expr("interval -'-1-2' year to month")
-        .ok("INTERVAL -'-1-2' YEAR TO MONTH");
-    expr("interval -'+1-2' year to month")
-        .ok("INTERVAL -'+1-2' YEAR TO MONTH");
-  }
-
-  /**
-   * Runs tests for INTERVAL... MONTH that should pass both parser and
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXPositive() tests.
-   */
-  public void subTestIntervalMonthPositive() {
-    // default precision
-    expr("interval '1' month")
-        .ok("INTERVAL '1' MONTH");
-    expr("interval '99' month")
-        .ok("INTERVAL '99' MONTH");
-
-    // explicit precision equal to default
-    expr("interval '1' month(2)")
-        .ok("INTERVAL '1' MONTH(2)");
-    expr("interval '99' month(2)")
-        .ok("INTERVAL '99' MONTH(2)");
-
-    // max precision
-    expr("interval '2147483647' month(10)")
-        .ok("INTERVAL '2147483647' MONTH(10)");
-
-    // min precision
-    expr("interval '0' month(1)")
-        .ok("INTERVAL '0' MONTH(1)");
-
-    // alternate precision
-    expr("interval '1234' month(4)")
-        .ok("INTERVAL '1234' MONTH(4)");
-
-    // sign
-    expr("interval '+1' month")
-        .ok("INTERVAL '+1' MONTH");
-    expr("interval '-1' month")
-        .ok("INTERVAL '-1' MONTH");
-    expr("interval +'1' month")
-        .ok("INTERVAL '1' MONTH");
-    expr("interval +'+1' month")
-        .ok("INTERVAL '+1' MONTH");
-    expr("interval +'-1' month")
-        .ok("INTERVAL '-1' MONTH");
-    expr("interval -'1' month")
-        .ok("INTERVAL -'1' MONTH");
-    expr("interval -'+1' month")
-        .ok("INTERVAL -'+1' MONTH");
-    expr("interval -'-1' month")
-        .ok("INTERVAL -'-1' MONTH");
-  }
-
-  /**
-   * Runs tests for INTERVAL... DAY that should pass both parser and
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXPositive() tests.
-   */
-  public void subTestIntervalDayPositive() {
-    // default precision
-    expr("interval '1' day")
-        .ok("INTERVAL '1' DAY");
-    expr("interval '99' day")
-        .ok("INTERVAL '99' DAY");
-
-    // explicit precision equal to default
-    expr("interval '1' day(2)")
-        .ok("INTERVAL '1' DAY(2)");
-    expr("interval '99' day(2)")
-        .ok("INTERVAL '99' DAY(2)");
-
-    // max precision
-    expr("interval '2147483647' day(10)")
-        .ok("INTERVAL '2147483647' DAY(10)");
-
-    // min precision
-    expr("interval '0' day(1)")
-        .ok("INTERVAL '0' DAY(1)");
-
-    // alternate precision
-    expr("interval '1234' day(4)")
-        .ok("INTERVAL '1234' DAY(4)");
-
-    // sign
-    expr("interval '+1' day")
-        .ok("INTERVAL '+1' DAY");
-    expr("interval '-1' day")
-        .ok("INTERVAL '-1' DAY");
-    expr("interval +'1' day")
-        .ok("INTERVAL '1' DAY");
-    expr("interval +'+1' day")
-        .ok("INTERVAL '+1' DAY");
-    expr("interval +'-1' day")
-        .ok("INTERVAL '-1' DAY");
-    expr("interval -'1' day")
-        .ok("INTERVAL -'1' DAY");
-    expr("interval -'+1' day")
-        .ok("INTERVAL -'+1' DAY");
-    expr("interval -'-1' day")
-        .ok("INTERVAL -'-1' DAY");
-  }
-
-  /**
-   * Runs tests for INTERVAL... DAY TO HOUR that should pass both parser and
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXPositive() tests.
-   */
-  public void subTestIntervalDayToHourPositive() {
-    // default precision
-    expr("interval '1 2' day to hour")
-        .ok("INTERVAL '1 2' DAY TO HOUR");
-    expr("interval '99 23' day to hour")
-        .ok("INTERVAL '99 23' DAY TO HOUR");
-    expr("interval '99 0' day to hour")
-        .ok("INTERVAL '99 0' DAY TO HOUR");
-
-    // explicit precision equal to default
-    expr("interval '1 2' day(2) to hour")
-        .ok("INTERVAL '1 2' DAY(2) TO HOUR");
-    expr("interval '99 23' day(2) to hour")
-        .ok("INTERVAL '99 23' DAY(2) TO HOUR");
-    expr("interval '99 0' day(2) to hour")
-        .ok("INTERVAL '99 0' DAY(2) TO HOUR");
-
-    // max precision
-    expr("interval '2147483647 23' day(10) to hour")
-        .ok("INTERVAL '2147483647 23' DAY(10) TO HOUR");
-
-    // min precision
-    expr("interval '0 0' day(1) to hour")
-        .ok("INTERVAL '0 0' DAY(1) TO HOUR");
-
-    // alternate precision
-    expr("interval '2345 2' day(4) to hour")
-        .ok("INTERVAL '2345 2' DAY(4) TO HOUR");
-
-    // sign
-    expr("interval '-1 2' day to hour")
-        .ok("INTERVAL '-1 2' DAY TO HOUR");
-    expr("interval '+1 2' day to hour")
-        .ok("INTERVAL '+1 2' DAY TO HOUR");
-    expr("interval +'1 2' day to hour")
-        .ok("INTERVAL '1 2' DAY TO HOUR");
-    expr("interval +'-1 2' day to hour")
-        .ok("INTERVAL '-1 2' DAY TO HOUR");
-    expr("interval +'+1 2' day to hour")
-        .ok("INTERVAL '+1 2' DAY TO HOUR");
-    expr("interval -'1 2' day to hour")
-        .ok("INTERVAL -'1 2' DAY TO HOUR");
-    expr("interval -'-1 2' day to hour")
-        .ok("INTERVAL -'-1 2' DAY TO HOUR");
-    expr("interval -'+1 2' day to hour")
-        .ok("INTERVAL -'+1 2' DAY TO HOUR");
-  }
-
-  /**
-   * Runs tests for INTERVAL... DAY TO MINUTE that should pass both parser and
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXPositive() tests.
-   */
-  public void subTestIntervalDayToMinutePositive() {
-    // default precision
-    expr("interval '1 2:3' day to minute")
-        .ok("INTERVAL '1 2:3' DAY TO MINUTE");
-    expr("interval '99 23:59' day to minute")
-        .ok("INTERVAL '99 23:59' DAY TO MINUTE");
-    expr("interval '99 0:0' day to minute")
-        .ok("INTERVAL '99 0:0' DAY TO MINUTE");
-
-    // explicit precision equal to default
-    expr("interval '1 2:3' day(2) to minute")
-        .ok("INTERVAL '1 2:3' DAY(2) TO MINUTE");
-    expr("interval '99 23:59' day(2) to minute")
-        .ok("INTERVAL '99 23:59' DAY(2) TO MINUTE");
-    expr("interval '99 0:0' day(2) to minute")
-        .ok("INTERVAL '99 0:0' DAY(2) TO MINUTE");
-
-    // max precision
-    expr("interval '2147483647 23:59' day(10) to minute")
-        .ok("INTERVAL '2147483647 23:59' DAY(10) TO MINUTE");
-
-    // min precision
-    expr("interval '0 0:0' day(1) to minute")
-        .ok("INTERVAL '0 0:0' DAY(1) TO MINUTE");
-
-    // alternate precision
-    expr("interval '2345 6:7' day(4) to minute")
-        .ok("INTERVAL '2345 6:7' DAY(4) TO MINUTE");
-
-    // sign
-    expr("interval '-1 2:3' day to minute")
-        .ok("INTERVAL '-1 2:3' DAY TO MINUTE");
-    expr("interval '+1 2:3' day to minute")
-        .ok("INTERVAL '+1 2:3' DAY TO MINUTE");
-    expr("interval +'1 2:3' day to minute")
-        .ok("INTERVAL '1 2:3' DAY TO MINUTE");
-    expr("interval +'-1 2:3' day to minute")
-        .ok("INTERVAL '-1 2:3' DAY TO MINUTE");
-    expr("interval +'+1 2:3' day to minute")
-        .ok("INTERVAL '+1 2:3' DAY TO MINUTE");
-    expr("interval -'1 2:3' day to minute")
-        .ok("INTERVAL -'1 2:3' DAY TO MINUTE");
-    expr("interval -'-1 2:3' day to minute")
-        .ok("INTERVAL -'-1 2:3' DAY TO MINUTE");
-    expr("interval -'+1 2:3' day to minute")
-        .ok("INTERVAL -'+1 2:3' DAY TO MINUTE");
-  }
-
-  /**
-   * Runs tests for INTERVAL... DAY TO SECOND that should pass both parser and
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXPositive() tests.
-   */
-  public void subTestIntervalDayToSecondPositive() {
-    // default precision
-    expr("interval '1 2:3:4' day to second")
-        .ok("INTERVAL '1 2:3:4' DAY TO SECOND");
-    expr("interval '99 23:59:59' day to second")
-        .ok("INTERVAL '99 23:59:59' DAY TO SECOND");
-    expr("interval '99 0:0:0' day to second")
-        .ok("INTERVAL '99 0:0:0' DAY TO SECOND");
-    expr("interval '99 23:59:59.999999' day to second")
-        .ok("INTERVAL '99 23:59:59.999999' DAY TO SECOND");
-    expr("interval '99 0:0:0.0' day to second")
-        .ok("INTERVAL '99 0:0:0.0' DAY TO SECOND");
-
-    // explicit precision equal to default
-    expr("interval '1 2:3:4' day(2) to second")
-        .ok("INTERVAL '1 2:3:4' DAY(2) TO SECOND");
-    expr("interval '99 23:59:59' day(2) to second")
-        .ok("INTERVAL '99 23:59:59' DAY(2) TO SECOND");
-    expr("interval '99 0:0:0' day(2) to second")
-        .ok("INTERVAL '99 0:0:0' DAY(2) TO SECOND");
-    expr("interval '99 23:59:59.999999' day to second(6)")
-        .ok("INTERVAL '99 23:59:59.999999' DAY TO SECOND(6)");
-    expr("interval '99 0:0:0.0' day to second(6)")
-        .ok("INTERVAL '99 0:0:0.0' DAY TO SECOND(6)");
-
-    // max precision
-    expr("interval '2147483647 23:59:59' day(10) to second")
-        .ok("INTERVAL '2147483647 23:59:59' DAY(10) TO SECOND");
-    expr("interval '2147483647 23:59:59.999999999' day(10) to second(9)")
-        .ok("INTERVAL '2147483647 23:59:59.999999999' DAY(10) TO SECOND(9)");
-
-    // min precision
-    expr("interval '0 0:0:0' day(1) to second")
-        .ok("INTERVAL '0 0:0:0' DAY(1) TO SECOND");
-    expr("interval '0 0:0:0.0' day(1) to second(1)")
-        .ok("INTERVAL '0 0:0:0.0' DAY(1) TO SECOND(1)");
-
-    // alternate precision
-    expr("interval '2345 6:7:8' day(4) to second")
-        .ok("INTERVAL '2345 6:7:8' DAY(4) TO SECOND");
-    expr("interval '2345 6:7:8.9012' day(4) to second(4)")
-        .ok("INTERVAL '2345 6:7:8.9012' DAY(4) TO SECOND(4)");
-
-    // sign
-    expr("interval '-1 2:3:4' day to second")
-        .ok("INTERVAL '-1 2:3:4' DAY TO SECOND");
-    expr("interval '+1 2:3:4' day to second")
-        .ok("INTERVAL '+1 2:3:4' DAY TO SECOND");
-    expr("interval +'1 2:3:4' day to second")
-        .ok("INTERVAL '1 2:3:4' DAY TO SECOND");
-    expr("interval +'-1 2:3:4' day to second")
-        .ok("INTERVAL '-1 2:3:4' DAY TO SECOND");
-    expr("interval +'+1 2:3:4' day to second")
-        .ok("INTERVAL '+1 2:3:4' DAY TO SECOND");
-    expr("interval -'1 2:3:4' day to second")
-        .ok("INTERVAL -'1 2:3:4' DAY TO SECOND");
-    expr("interval -'-1 2:3:4' day to second")
-        .ok("INTERVAL -'-1 2:3:4' DAY TO SECOND");
-    expr("interval -'+1 2:3:4' day to second")
-        .ok("INTERVAL -'+1 2:3:4' DAY TO SECOND");
-  }
-
-  /**
-   * Runs tests for INTERVAL... HOUR that should pass both parser and
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXPositive() tests.
-   */
-  public void subTestIntervalHourPositive() {
-    // default precision
-    expr("interval '1' hour")
-        .ok("INTERVAL '1' HOUR");
-    expr("interval '99' hour")
-        .ok("INTERVAL '99' HOUR");
-
-    // explicit precision equal to default
-    expr("interval '1' hour(2)")
-        .ok("INTERVAL '1' HOUR(2)");
-    expr("interval '99' hour(2)")
-        .ok("INTERVAL '99' HOUR(2)");
-
-    // max precision
-    expr("interval '2147483647' hour(10)")
-        .ok("INTERVAL '2147483647' HOUR(10)");
-
-    // min precision
-    expr("interval '0' hour(1)")
-        .ok("INTERVAL '0' HOUR(1)");
-
-    // alternate precision
-    expr("interval '1234' hour(4)")
-        .ok("INTERVAL '1234' HOUR(4)");
-
-    // sign
-    expr("interval '+1' hour")
-        .ok("INTERVAL '+1' HOUR");
-    expr("interval '-1' hour")
-        .ok("INTERVAL '-1' HOUR");
-    expr("interval +'1' hour")
-        .ok("INTERVAL '1' HOUR");
-    expr("interval +'+1' hour")
-        .ok("INTERVAL '+1' HOUR");
-    expr("interval +'-1' hour")
-        .ok("INTERVAL '-1' HOUR");
-    expr("interval -'1' hour")
-        .ok("INTERVAL -'1' HOUR");
-    expr("interval -'+1' hour")
-        .ok("INTERVAL -'+1' HOUR");
-    expr("interval -'-1' hour")
-        .ok("INTERVAL -'-1' HOUR");
-  }
-
-  /**
-   * Runs tests for INTERVAL... HOUR TO MINUTE that should pass both parser
-   * and validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXPositive() tests.
-   */
-  public void subTestIntervalHourToMinutePositive() {
-    // default precision
-    expr("interval '2:3' hour to minute")
-        .ok("INTERVAL '2:3' HOUR TO MINUTE");
-    expr("interval '23:59' hour to minute")
-        .ok("INTERVAL '23:59' HOUR TO MINUTE");
-    expr("interval '99:0' hour to minute")
-        .ok("INTERVAL '99:0' HOUR TO MINUTE");
-
-    // explicit precision equal to default
-    expr("interval '2:3' hour(2) to minute")
-        .ok("INTERVAL '2:3' HOUR(2) TO MINUTE");
-    expr("interval '23:59' hour(2) to minute")
-        .ok("INTERVAL '23:59' HOUR(2) TO MINUTE");
-    expr("interval '99:0' hour(2) to minute")
-        .ok("INTERVAL '99:0' HOUR(2) TO MINUTE");
-
-    // max precision
-    expr("interval '2147483647:59' hour(10) to minute")
-        .ok("INTERVAL '2147483647:59' HOUR(10) TO MINUTE");
-
-    // min precision
-    expr("interval '0:0' hour(1) to minute")
-        .ok("INTERVAL '0:0' HOUR(1) TO MINUTE");
-
-    // alternate precision
-    expr("interval '2345:7' hour(4) to minute")
-        .ok("INTERVAL '2345:7' HOUR(4) TO MINUTE");
-
-    // sign
-    expr("interval '-1:3' hour to minute")
-        .ok("INTERVAL '-1:3' HOUR TO MINUTE");
-    expr("interval '+1:3' hour to minute")
-        .ok("INTERVAL '+1:3' HOUR TO MINUTE");
-    expr("interval +'2:3' hour to minute")
-        .ok("INTERVAL '2:3' HOUR TO MINUTE");
-    expr("interval +'-2:3' hour to minute")
-        .ok("INTERVAL '-2:3' HOUR TO MINUTE");
-    expr("interval +'+2:3' hour to minute")
-        .ok("INTERVAL '+2:3' HOUR TO MINUTE");
-    expr("interval -'2:3' hour to minute")
-        .ok("INTERVAL -'2:3' HOUR TO MINUTE");
-    expr("interval -'-2:3' hour to minute")
-        .ok("INTERVAL -'-2:3' HOUR TO MINUTE");
-    expr("interval -'+2:3' hour to minute")
-        .ok("INTERVAL -'+2:3' HOUR TO MINUTE");
-  }
-
-  /**
-   * Runs tests for INTERVAL... HOUR TO SECOND that should pass both parser
-   * and validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXPositive() tests.
-   */
-  public void subTestIntervalHourToSecondPositive() {
-    // default precision
-    expr("interval '2:3:4' hour to second")
-        .ok("INTERVAL '2:3:4' HOUR TO SECOND");
-    expr("interval '23:59:59' hour to second")
-        .ok("INTERVAL '23:59:59' HOUR TO SECOND");
-    expr("interval '99:0:0' hour to second")
-        .ok("INTERVAL '99:0:0' HOUR TO SECOND");
-    expr("interval '23:59:59.999999' hour to second")
-        .ok("INTERVAL '23:59:59.999999' HOUR TO SECOND");
-    expr("interval '99:0:0.0' hour to second")
-        .ok("INTERVAL '99:0:0.0' HOUR TO SECOND");
-
-    // explicit precision equal to default
-    expr("interval '2:3:4' hour(2) to second")
-        .ok("INTERVAL '2:3:4' HOUR(2) TO SECOND");
-    expr("interval '99:59:59' hour(2) to second")
-        .ok("INTERVAL '99:59:59' HOUR(2) TO SECOND");
-    expr("interval '99:0:0' hour(2) to second")
-        .ok("INTERVAL '99:0:0' HOUR(2) TO SECOND");
-    expr("interval '23:59:59.999999' hour to second(6)")
-        .ok("INTERVAL '23:59:59.999999' HOUR TO SECOND(6)");
-    expr("interval '99:0:0.0' hour to second(6)")
-        .ok("INTERVAL '99:0:0.0' HOUR TO SECOND(6)");
-
-    // max precision
-    expr("interval '2147483647:59:59' hour(10) to second")
-        .ok("INTERVAL '2147483647:59:59' HOUR(10) TO SECOND");
-    expr("interval '2147483647:59:59.999999999' hour(10) to second(9)")
-        .ok("INTERVAL '2147483647:59:59.999999999' HOUR(10) TO SECOND(9)");
-
-    // min precision
-    expr("interval '0:0:0' hour(1) to second")
-        .ok("INTERVAL '0:0:0' HOUR(1) TO SECOND");
-    expr("interval '0:0:0.0' hour(1) to second(1)")
-        .ok("INTERVAL '0:0:0.0' HOUR(1) TO SECOND(1)");
-
-    // alternate precision
-    expr("interval '2345:7:8' hour(4) to second")
-        .ok("INTERVAL '2345:7:8' HOUR(4) TO SECOND");
-    expr("interval '2345:7:8.9012' hour(4) to second(4)")
-        .ok("INTERVAL '2345:7:8.9012' HOUR(4) TO SECOND(4)");
-
-    // sign
-    expr("interval '-2:3:4' hour to second")
-        .ok("INTERVAL '-2:3:4' HOUR TO SECOND");
-    expr("interval '+2:3:4' hour to second")
-        .ok("INTERVAL '+2:3:4' HOUR TO SECOND");
-    expr("interval +'2:3:4' hour to second")
-        .ok("INTERVAL '2:3:4' HOUR TO SECOND");
-    expr("interval +'-2:3:4' hour to second")
-        .ok("INTERVAL '-2:3:4' HOUR TO SECOND");
-    expr("interval +'+2:3:4' hour to second")
-        .ok("INTERVAL '+2:3:4' HOUR TO SECOND");
-    expr("interval -'2:3:4' hour to second")
-        .ok("INTERVAL -'2:3:4' HOUR TO SECOND");
-    expr("interval -'-2:3:4' hour to second")
-        .ok("INTERVAL -'-2:3:4' HOUR TO SECOND");
-    expr("interval -'+2:3:4' hour to second")
-        .ok("INTERVAL -'+2:3:4' HOUR TO SECOND");
-  }
-
-  /**
-   * Runs tests for INTERVAL... MINUTE that should pass both parser and
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXPositive() tests.
-   */
-  public void subTestIntervalMinutePositive() {
-    // default precision
-    expr("interval '1' minute")
-        .ok("INTERVAL '1' MINUTE");
-    expr("interval '99' minute")
-        .ok("INTERVAL '99' MINUTE");
-
-    // explicit precision equal to default
-    expr("interval '1' minute(2)")
-        .ok("INTERVAL '1' MINUTE(2)");
-    expr("interval '99' minute(2)")
-        .ok("INTERVAL '99' MINUTE(2)");
-
-    // max precision
-    expr("interval '2147483647' minute(10)")
-        .ok("INTERVAL '2147483647' MINUTE(10)");
-
-    // min precision
-    expr("interval '0' minute(1)")
-        .ok("INTERVAL '0' MINUTE(1)");
-
-    // alternate precision
-    expr("interval '1234' minute(4)")
-        .ok("INTERVAL '1234' MINUTE(4)");
-
-    // sign
-    expr("interval '+1' minute")
-        .ok("INTERVAL '+1' MINUTE");
-    expr("interval '-1' minute")
-        .ok("INTERVAL '-1' MINUTE");
-    expr("interval +'1' minute")
-        .ok("INTERVAL '1' MINUTE");
-    expr("interval +'+1' minute")
-        .ok("INTERVAL '+1' MINUTE");
-    expr("interval +'+1' minute")
-        .ok("INTERVAL '+1' MINUTE");
-    expr("interval -'1' minute")
-        .ok("INTERVAL -'1' MINUTE");
-    expr("interval -'+1' minute")
-        .ok("INTERVAL -'+1' MINUTE");
-    expr("interval -'-1' minute")
-        .ok("INTERVAL -'-1' MINUTE");
-  }
-
-  /**
-   * Runs tests for INTERVAL... MINUTE TO SECOND that should pass both parser
-   * and validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXPositive() tests.
-   */
-  public void subTestIntervalMinuteToSecondPositive() {
-    // default precision
-    expr("interval '2:4' minute to second")
-        .ok("INTERVAL '2:4' MINUTE TO SECOND");
-    expr("interval '59:59' minute to second")
-        .ok("INTERVAL '59:59' MINUTE TO SECOND");
-    expr("interval '99:0' minute to second")
-        .ok("INTERVAL '99:0' MINUTE TO SECOND");
-    expr("interval '59:59.999999' minute to second")
-        .ok("INTERVAL '59:59.999999' MINUTE TO SECOND");
-    expr("interval '99:0.0' minute to second")
-        .ok("INTERVAL '99:0.0' MINUTE TO SECOND");
-
-    // explicit precision equal to default
-    expr("interval '2:4' minute(2) to second")
-        .ok("INTERVAL '2:4' MINUTE(2) TO SECOND");
-    expr("interval '59:59' minute(2) to second")
-        .ok("INTERVAL '59:59' MINUTE(2) TO SECOND");
-    expr("interval '99:0' minute(2) to second")
-        .ok("INTERVAL '99:0' MINUTE(2) TO SECOND");
-    expr("interval '99:59.999999' minute to second(6)")
-        .ok("INTERVAL '99:59.999999' MINUTE TO SECOND(6)");
-    expr("interval '99:0.0' minute to second(6)")
-        .ok("INTERVAL '99:0.0' MINUTE TO SECOND(6)");
-
-    // max precision
-    expr("interval '2147483647:59' minute(10) to second")
-        .ok("INTERVAL '2147483647:59' MINUTE(10) TO SECOND");
-    expr("interval '2147483647:59.999999999' minute(10) to second(9)")
-        .ok("INTERVAL '2147483647:59.999999999' MINUTE(10) TO SECOND(9)");
-
-    // min precision
-    expr("interval '0:0' minute(1) to second")
-        .ok("INTERVAL '0:0' MINUTE(1) TO SECOND");
-    expr("interval '0:0.0' minute(1) to second(1)")
-        .ok("INTERVAL '0:0.0' MINUTE(1) TO SECOND(1)");
-
-    // alternate precision
-    expr("interval '2345:8' minute(4) to second")
-        .ok("INTERVAL '2345:8' MINUTE(4) TO SECOND");
-    expr("interval '2345:7.8901' minute(4) to second(4)")
-        .ok("INTERVAL '2345:7.8901' MINUTE(4) TO SECOND(4)");
-
-    // sign
-    expr("interval '-3:4' minute to second")
-        .ok("INTERVAL '-3:4' MINUTE TO SECOND");
-    expr("interval '+3:4' minute to second")
-        .ok("INTERVAL '+3:4' MINUTE TO SECOND");
-    expr("interval +'3:4' minute to second")
-        .ok("INTERVAL '3:4' MINUTE TO SECOND");
-    expr("interval +'-3:4' minute to second")
-        .ok("INTERVAL '-3:4' MINUTE TO SECOND");
-    expr("interval +'+3:4' minute to second")
-        .ok("INTERVAL '+3:4' MINUTE TO SECOND");
-    expr("interval -'3:4' minute to second")
-        .ok("INTERVAL -'3:4' MINUTE TO SECOND");
-    expr("interval -'-3:4' minute to second")
-        .ok("INTERVAL -'-3:4' MINUTE TO SECOND");
-    expr("interval -'+3:4' minute to second")
-        .ok("INTERVAL -'+3:4' MINUTE TO SECOND");
-  }
-
-  /**
-   * Runs tests for INTERVAL... SECOND that should pass both parser and
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXPositive() tests.
-   */
-  public void subTestIntervalSecondPositive() {
-    // default precision
-    expr("interval '1' second")
-        .ok("INTERVAL '1' SECOND");
-    expr("interval '99' second")
-        .ok("INTERVAL '99' SECOND");
-
-    // explicit precision equal to default
-    expr("interval '1' second(2)")
-        .ok("INTERVAL '1' SECOND(2)");
-    expr("interval '99' second(2)")
-        .ok("INTERVAL '99' SECOND(2)");
-    expr("interval '1' second(2,6)")
-        .ok("INTERVAL '1' SECOND(2, 6)");
-    expr("interval '99' second(2,6)")
-        .ok("INTERVAL '99' SECOND(2, 6)");
-
-    // max precision
-    expr("interval '2147483647' second(10)")
-        .ok("INTERVAL '2147483647' SECOND(10)");
-    expr("interval '2147483647.999999999' second(9,9)")
-        .ok("INTERVAL '2147483647.999999999' SECOND(9, 9)");
-
-    // min precision
-    expr("interval '0' second(1)")
-        .ok("INTERVAL '0' SECOND(1)");
-    expr("interval '0.0' second(1,1)")
-        .ok("INTERVAL '0.0' SECOND(1, 1)");
-
-    // alternate precision
-    expr("interval '1234' second(4)")
-        .ok("INTERVAL '1234' SECOND(4)");
-    expr("interval '1234.56789' second(4,5)")
-        .ok("INTERVAL '1234.56789' SECOND(4, 5)");
-
-    // sign
-    expr("interval '+1' second")
-        .ok("INTERVAL '+1' SECOND");
-    expr("interval '-1' second")
-        .ok("INTERVAL '-1' SECOND");
-    expr("interval +'1' second")
-        .ok("INTERVAL '1' SECOND");
-    expr("interval +'+1' second")
-        .ok("INTERVAL '+1' SECOND");
-    expr("interval +'-1' second")
-        .ok("INTERVAL '-1' SECOND");
-    expr("interval -'1' second")
-        .ok("INTERVAL -'1' SECOND");
-    expr("interval -'+1' second")
-        .ok("INTERVAL -'+1' SECOND");
-    expr("interval -'-1' second")
-        .ok("INTERVAL -'-1' SECOND");
-  }
-
-  /**
-   * Runs tests for INTERVAL... YEAR that should pass parser but fail
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXFailsValidation() tests.
-   */
-  public void subTestIntervalYearFailsValidation() {
-    // Qualifier - field mismatches
-    expr("INTERVAL '-' YEAR")
-        .ok("INTERVAL '-' YEAR");
-    expr("INTERVAL '1-2' YEAR")
-        .ok("INTERVAL '1-2' YEAR");
-    expr("INTERVAL '1.2' YEAR")
-        .ok("INTERVAL '1.2' YEAR");
-    expr("INTERVAL '1 2' YEAR")
-        .ok("INTERVAL '1 2' YEAR");
-    expr("INTERVAL '1-2' YEAR(2)")
-        .ok("INTERVAL '1-2' YEAR(2)");
-    expr("INTERVAL 'bogus text' YEAR")
-        .ok("INTERVAL 'bogus text' YEAR");
-
-    // negative field values
-    expr("INTERVAL '--1' YEAR")
-        .ok("INTERVAL '--1' YEAR");
-
-    // Field value out of range
-    //  (default, explicit default, alt, neg alt, max, neg max)
-    expr("INTERVAL '100' YEAR")
-        .ok("INTERVAL '100' YEAR");
-    expr("INTERVAL '100' YEAR(2)")
-        .ok("INTERVAL '100' YEAR(2)");
-    expr("INTERVAL '1000' YEAR(3)")
-        .ok("INTERVAL '1000' YEAR(3)");
-    expr("INTERVAL '-1000' YEAR(3)")
-        .ok("INTERVAL '-1000' YEAR(3)");
-    expr("INTERVAL '2147483648' YEAR(10)")
-        .ok("INTERVAL '2147483648' YEAR(10)");
-    expr("INTERVAL '-2147483648' YEAR(10)")
-        .ok("INTERVAL '-2147483648' YEAR(10)");
-
-    // precision > maximum
-    expr("INTERVAL '1' YEAR(11)")
-        .ok("INTERVAL '1' YEAR(11)");
-
-    // precision < minimum allowed)
-    // note: parser will catch negative values, here we
-    // just need to check for 0
-    expr("INTERVAL '0' YEAR(0)")
-        .ok("INTERVAL '0' YEAR(0)");
-  }
-
-  /**
-   * Runs tests for INTERVAL... YEAR TO MONTH that should pass parser but fail
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXFailsValidation() tests.
-   */
-  public void subTestIntervalYearToMonthFailsValidation() {
-    // Qualifier - field mismatches
-    expr("INTERVAL '-' YEAR TO MONTH")
-        .ok("INTERVAL '-' YEAR TO MONTH");
-    expr("INTERVAL '1' YEAR TO MONTH")
-        .ok("INTERVAL '1' YEAR TO MONTH");
-    expr("INTERVAL '1:2' YEAR TO MONTH")
-        .ok("INTERVAL '1:2' YEAR TO MONTH");
-    expr("INTERVAL '1.2' YEAR TO MONTH")
-        .ok("INTERVAL '1.2' YEAR TO MONTH");
-    expr("INTERVAL '1 2' YEAR TO MONTH")
-        .ok("INTERVAL '1 2' YEAR TO MONTH");
-    expr("INTERVAL '1:2' YEAR(2) TO MONTH")
-        .ok("INTERVAL '1:2' YEAR(2) TO MONTH");
-    expr("INTERVAL 'bogus text' YEAR TO MONTH")
-        .ok("INTERVAL 'bogus text' YEAR TO MONTH");
-
-    // negative field values
-    expr("INTERVAL '--1-2' YEAR TO MONTH")
-        .ok("INTERVAL '--1-2' YEAR TO MONTH");
-    expr("INTERVAL '1--2' YEAR TO MONTH")
-        .ok("INTERVAL '1--2' YEAR TO MONTH");
-
-    // Field value out of range
-    //  (default, explicit default, alt, neg alt, max, neg max)
-    //  plus >max value for mid/end fields
-    expr("INTERVAL '100-0' YEAR TO MONTH")
-        .ok("INTERVAL '100-0' YEAR TO MONTH");
-    expr("INTERVAL '100-0' YEAR(2) TO MONTH")
-        .ok("INTERVAL '100-0' YEAR(2) TO MONTH");
-    expr("INTERVAL '1000-0' YEAR(3) TO MONTH")
-        .ok("INTERVAL '1000-0' YEAR(3) TO MONTH");
-    expr("INTERVAL '-1000-0' YEAR(3) TO MONTH")
-        .ok("INTERVAL '-1000-0' YEAR(3) TO MONTH");
-    expr("INTERVAL '2147483648-0' YEAR(10) TO MONTH")
-        .ok("INTERVAL '2147483648-0' YEAR(10) TO MONTH");
-    expr("INTERVAL '-2147483648-0' YEAR(10) TO MONTH")
-        .ok("INTERVAL '-2147483648-0' YEAR(10) TO MONTH");
-    expr("INTERVAL '1-12' YEAR TO MONTH")
-        .ok("INTERVAL '1-12' YEAR TO MONTH");
-
-    // precision > maximum
-    expr("INTERVAL '1-1' YEAR(11) TO MONTH")
-        .ok("INTERVAL '1-1' YEAR(11) TO MONTH");
-
-    // precision < minimum allowed)
-    // note: parser will catch negative values, here we
-    // just need to check for 0
-    expr("INTERVAL '0-0' YEAR(0) TO MONTH")
-        .ok("INTERVAL '0-0' YEAR(0) TO MONTH");
-  }
-
-  /**
-   * Runs tests for INTERVAL... MONTH that should pass parser but fail
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXFailsValidation() tests.
-   */
-  public void subTestIntervalMonthFailsValidation() {
-    // Qualifier - field mismatches
-    expr("INTERVAL '-' MONTH")
-        .ok("INTERVAL '-' MONTH");
-    expr("INTERVAL '1-2' MONTH")
-        .ok("INTERVAL '1-2' MONTH");
-    expr("INTERVAL '1.2' MONTH")
-        .ok("INTERVAL '1.2' MONTH");
-    expr("INTERVAL '1 2' MONTH")
-        .ok("INTERVAL '1 2' MONTH");
-    expr("INTERVAL '1-2' MONTH(2)")
-        .ok("INTERVAL '1-2' MONTH(2)");
-    expr("INTERVAL 'bogus text' MONTH")
-        .ok("INTERVAL 'bogus text' MONTH");
-
-    // negative field values
-    expr("INTERVAL '--1' MONTH")
-        .ok("INTERVAL '--1' MONTH");
-
-    // Field value out of range
-    //  (default, explicit default, alt, neg alt, max, neg max)
-    expr("INTERVAL '100' MONTH")
-        .ok("INTERVAL '100' MONTH");
-    expr("INTERVAL '100' MONTH(2)")
-        .ok("INTERVAL '100' MONTH(2)");
-    expr("INTERVAL '1000' MONTH(3)")
-        .ok("INTERVAL '1000' MONTH(3)");
-    expr("INTERVAL '-1000' MONTH(3)")
-        .ok("INTERVAL '-1000' MONTH(3)");
-    expr("INTERVAL '2147483648' MONTH(10)")
-        .ok("INTERVAL '2147483648' MONTH(10)");
-    expr("INTERVAL '-2147483648' MONTH(10)")
-        .ok("INTERVAL '-2147483648' MONTH(10)");
-
-    // precision > maximum
-    expr("INTERVAL '1' MONTH(11)")
-        .ok("INTERVAL '1' MONTH(11)");
-
-    // precision < minimum allowed)
-    // note: parser will catch negative values, here we
-    // just need to check for 0
-    expr("INTERVAL '0' MONTH(0)")
-        .ok("INTERVAL '0' MONTH(0)");
-  }
-
-  /**
-   * Runs tests for INTERVAL... DAY that should pass parser but fail
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXFailsValidation() tests.
-   */
-  public void subTestIntervalDayFailsValidation() {
-    // Qualifier - field mismatches
-    expr("INTERVAL '-' DAY")
-        .ok("INTERVAL '-' DAY");
-    expr("INTERVAL '1-2' DAY")
-        .ok("INTERVAL '1-2' DAY");
-    expr("INTERVAL '1.2' DAY")
-        .ok("INTERVAL '1.2' DAY");
-    expr("INTERVAL '1 2' DAY")
-        .ok("INTERVAL '1 2' DAY");
-    expr("INTERVAL '1:2' DAY")
-        .ok("INTERVAL '1:2' DAY");
-    expr("INTERVAL '1-2' DAY(2)")
-        .ok("INTERVAL '1-2' DAY(2)");
-    expr("INTERVAL 'bogus text' DAY")
-        .ok("INTERVAL 'bogus text' DAY");
-
-    // negative field values
-    expr("INTERVAL '--1' DAY")
-        .ok("INTERVAL '--1' DAY");
-
-    // Field value out of range
-    //  (default, explicit default, alt, neg alt, max, neg max)
-    expr("INTERVAL '100' DAY")
-        .ok("INTERVAL '100' DAY");
-    expr("INTERVAL '100' DAY(2)")
-        .ok("INTERVAL '100' DAY(2)");
-    expr("INTERVAL '1000' DAY(3)")
-        .ok("INTERVAL '1000' DAY(3)");
-    expr("INTERVAL '-1000' DAY(3)")
-        .ok("INTERVAL '-1000' DAY(3)");
-    expr("INTERVAL '2147483648' DAY(10)")
-        .ok("INTERVAL '2147483648' DAY(10)");
-    expr("INTERVAL '-2147483648' DAY(10)")
-        .ok("INTERVAL '-2147483648' DAY(10)");
-
-    // precision > maximum
-    expr("INTERVAL '1' DAY(11)")
-        .ok("INTERVAL '1' DAY(11)");
-
-    // precision < minimum allowed)
-    // note: parser will catch negative values, here we
-    // just need to check for 0
-    expr("INTERVAL '0' DAY(0)")
-        .ok("INTERVAL '0' DAY(0)");
+  @Test void testMapQueryConstructor() {
+    // parser allows odd elements; validator will reject it
+    sql("SELECT map(SELECT 1)")
+        .ok("SELECT (MAP ((SELECT 1)))");
+    sql("SELECT map(SELECT 1, 2)")
+        .ok("SELECT (MAP ((SELECT 1, 2)))");
+    // with upper case
+    sql("SELECT MAP(SELECT 1, 2)")
+        .ok("SELECT (MAP ((SELECT 1, 2)))");
+    // with space
+    sql("SELECT map (SELECT 1, 2)")
+        .ok("SELECT (MAP ((SELECT 1, 2)))");
+    sql("SELECT map(SELECT T.x, T.y FROM (VALUES(1, 2)) AS T(x, y))")
+        .ok("SELECT (MAP ((SELECT `T`.`X`, `T`.`Y`\n"
+            + "FROM (VALUES (ROW(1, 2))) AS `T` (`X`, `Y`))))");
+    sql("SELECT map(1, ^SELECT^ x FROM (VALUES(1)) x)")
+        .fails("(?s)Incorrect syntax near the keyword 'SELECT'.*");
+    sql("SELECT map(SELECT x FROM (VALUES(1)) x, ^SELECT^ x FROM (VALUES(1)) x)")
+        .fails("(?s)Incorrect syntax near the keyword 'SELECT' at.*");
   }
 
   @Test void testVisitSqlInsertWithSqlShuttle() {
@@ -6320,8 +6256,8 @@ public class SqlParserTest {
       }
     });
     final String str0 = "INSERT INTO `EMPS`\n"
-        + "(SELECT *\n"
-        + "FROM `EMPS`)";
+        + "SELECT *\n"
+        + "FROM `EMPS`";
     assertThat(str0, is(toLinux(sqlNodeVisited0.toString())));
 
     final String sql1 = "insert into emps select empno from emps";
@@ -6333,8 +6269,8 @@ public class SqlParserTest {
       }
     });
     final String str1 = "INSERT INTO `EMPS`\n"
-        + "(SELECT `EMPNO`\n"
-        + "FROM `EMPS`)";
+        + "SELECT `EMPNO`\n"
+        + "FROM `EMPS`";
     assertThat(str1, is(toLinux(sqlNodeVisited1.toString())));
   }
 
@@ -6358,646 +6294,6 @@ public class SqlParserTest {
   }
 
   /**
-   * Runs tests for INTERVAL... DAY TO HOUR that should pass parser but fail
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXFailsValidation() tests.
-   */
-  public void subTestIntervalDayToHourFailsValidation() {
-    // Qualifier - field mismatches
-    expr("INTERVAL '-' DAY TO HOUR")
-        .ok("INTERVAL '-' DAY TO HOUR");
-    expr("INTERVAL '1' DAY TO HOUR")
-        .ok("INTERVAL '1' DAY TO HOUR");
-    expr("INTERVAL '1:2' DAY TO HOUR")
-        .ok("INTERVAL '1:2' DAY TO HOUR");
-    expr("INTERVAL '1.2' DAY TO HOUR")
-        .ok("INTERVAL '1.2' DAY TO HOUR");
-    expr("INTERVAL '1 x' DAY TO HOUR")
-        .ok("INTERVAL '1 x' DAY TO HOUR");
-    expr("INTERVAL ' ' DAY TO HOUR")
-        .ok("INTERVAL ' ' DAY TO HOUR");
-    expr("INTERVAL '1:2' DAY(2) TO HOUR")
-        .ok("INTERVAL '1:2' DAY(2) TO HOUR");
-    expr("INTERVAL 'bogus text' DAY TO HOUR")
-        .ok("INTERVAL 'bogus text' DAY TO HOUR");
-
-    // negative field values
-    expr("INTERVAL '--1 1' DAY TO HOUR")
-        .ok("INTERVAL '--1 1' DAY TO HOUR");
-    expr("INTERVAL '1 -1' DAY TO HOUR")
-        .ok("INTERVAL '1 -1' DAY TO HOUR");
-
-    // Field value out of range
-    //  (default, explicit default, alt, neg alt, max, neg max)
-    //  plus >max value for mid/end fields
-    expr("INTERVAL '100 0' DAY TO HOUR")
-        .ok("INTERVAL '100 0' DAY TO HOUR");
-    expr("INTERVAL '100 0' DAY(2) TO HOUR")
-        .ok("INTERVAL '100 0' DAY(2) TO HOUR");
-    expr("INTERVAL '1000 0' DAY(3) TO HOUR")
-        .ok("INTERVAL '1000 0' DAY(3) TO HOUR");
-    expr("INTERVAL '-1000 0' DAY(3) TO HOUR")
-        .ok("INTERVAL '-1000 0' DAY(3) TO HOUR");
-    expr("INTERVAL '2147483648 0' DAY(10) TO HOUR")
-        .ok("INTERVAL '2147483648 0' DAY(10) TO HOUR");
-    expr("INTERVAL '-2147483648 0' DAY(10) TO HOUR")
-        .ok("INTERVAL '-2147483648 0' DAY(10) TO HOUR");
-    expr("INTERVAL '1 24' DAY TO HOUR")
-        .ok("INTERVAL '1 24' DAY TO HOUR");
-
-    // precision > maximum
-    expr("INTERVAL '1 1' DAY(11) TO HOUR")
-        .ok("INTERVAL '1 1' DAY(11) TO HOUR");
-
-    // precision < minimum allowed)
-    // note: parser will catch negative values, here we
-    // just need to check for 0
-    expr("INTERVAL '0 0' DAY(0) TO HOUR")
-        .ok("INTERVAL '0 0' DAY(0) TO HOUR");
-  }
-
-  /**
-   * Runs tests for INTERVAL... DAY TO MINUTE that should pass parser but fail
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXFailsValidation() tests.
-   */
-  public void subTestIntervalDayToMinuteFailsValidation() {
-    // Qualifier - field mismatches
-    expr("INTERVAL ' :' DAY TO MINUTE")
-        .ok("INTERVAL ' :' DAY TO MINUTE");
-    expr("INTERVAL '1' DAY TO MINUTE")
-        .ok("INTERVAL '1' DAY TO MINUTE");
-    expr("INTERVAL '1 2' DAY TO MINUTE")
-        .ok("INTERVAL '1 2' DAY TO MINUTE");
-    expr("INTERVAL '1:2' DAY TO MINUTE")
-        .ok("INTERVAL '1:2' DAY TO MINUTE");
-    expr("INTERVAL '1.2' DAY TO MINUTE")
-        .ok("INTERVAL '1.2' DAY TO MINUTE");
-    expr("INTERVAL 'x 1:1' DAY TO MINUTE")
-        .ok("INTERVAL 'x 1:1' DAY TO MINUTE");
-    expr("INTERVAL '1 x:1' DAY TO MINUTE")
-        .ok("INTERVAL '1 x:1' DAY TO MINUTE");
-    expr("INTERVAL '1 1:x' DAY TO MINUTE")
-        .ok("INTERVAL '1 1:x' DAY TO MINUTE");
-    expr("INTERVAL '1 1:2:3' DAY TO MINUTE")
-        .ok("INTERVAL '1 1:2:3' DAY TO MINUTE");
-    expr("INTERVAL '1 1:1:1.2' DAY TO MINUTE")
-        .ok("INTERVAL '1 1:1:1.2' DAY TO MINUTE");
-    expr("INTERVAL '1 1:2:3' DAY(2) TO MINUTE")
-        .ok("INTERVAL '1 1:2:3' DAY(2) TO MINUTE");
-    expr("INTERVAL '1 1' DAY(2) TO MINUTE")
-        .ok("INTERVAL '1 1' DAY(2) TO MINUTE");
-    expr("INTERVAL 'bogus text' DAY TO MINUTE")
-        .ok("INTERVAL 'bogus text' DAY TO MINUTE");
-
-    // negative field values
-    expr("INTERVAL '--1 1:1' DAY TO MINUTE")
-        .ok("INTERVAL '--1 1:1' DAY TO MINUTE");
-    expr("INTERVAL '1 -1:1' DAY TO MINUTE")
-        .ok("INTERVAL '1 -1:1' DAY TO MINUTE");
-    expr("INTERVAL '1 1:-1' DAY TO MINUTE")
-        .ok("INTERVAL '1 1:-1' DAY TO MINUTE");
-
-    // Field value out of range
-    //  (default, explicit default, alt, neg alt, max, neg max)
-    //  plus >max value for mid/end fields
-    expr("INTERVAL '100 0' DAY TO MINUTE")
-        .ok("INTERVAL '100 0' DAY TO MINUTE");
-    expr("INTERVAL '100 0' DAY(2) TO MINUTE")
-        .ok("INTERVAL '100 0' DAY(2) TO MINUTE");
-    expr("INTERVAL '1000 0' DAY(3) TO MINUTE")
-        .ok("INTERVAL '1000 0' DAY(3) TO MINUTE");
-    expr("INTERVAL '-1000 0' DAY(3) TO MINUTE")
-        .ok("INTERVAL '-1000 0' DAY(3) TO MINUTE");
-    expr("INTERVAL '2147483648 0' DAY(10) TO MINUTE")
-        .ok("INTERVAL '2147483648 0' DAY(10) TO MINUTE");
-    expr("INTERVAL '-2147483648 0' DAY(10) TO MINUTE")
-        .ok("INTERVAL '-2147483648 0' DAY(10) TO MINUTE");
-    expr("INTERVAL '1 24:1' DAY TO MINUTE")
-        .ok("INTERVAL '1 24:1' DAY TO MINUTE");
-    expr("INTERVAL '1 1:60' DAY TO MINUTE")
-        .ok("INTERVAL '1 1:60' DAY TO MINUTE");
-
-    // precision > maximum
-    expr("INTERVAL '1 1' DAY(11) TO MINUTE")
-        .ok("INTERVAL '1 1' DAY(11) TO MINUTE");
-
-    // precision < minimum allowed)
-    // note: parser will catch negative values, here we
-    // just need to check for 0
-    expr("INTERVAL '0 0' DAY(0) TO MINUTE")
-        .ok("INTERVAL '0 0' DAY(0) TO MINUTE");
-  }
-
-  /**
-   * Runs tests for INTERVAL... DAY TO SECOND that should pass parser but fail
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXFailsValidation() tests.
-   */
-  public void subTestIntervalDayToSecondFailsValidation() {
-    // Qualifier - field mismatches
-    expr("INTERVAL ' ::' DAY TO SECOND")
-        .ok("INTERVAL ' ::' DAY TO SECOND");
-    expr("INTERVAL ' ::.' DAY TO SECOND")
-        .ok("INTERVAL ' ::.' DAY TO SECOND");
-    expr("INTERVAL '1' DAY TO SECOND")
-        .ok("INTERVAL '1' DAY TO SECOND");
-    expr("INTERVAL '1 2' DAY TO SECOND")
-        .ok("INTERVAL '1 2' DAY TO SECOND");
-    expr("INTERVAL '1:2' DAY TO SECOND")
-        .ok("INTERVAL '1:2' DAY TO SECOND");
-    expr("INTERVAL '1.2' DAY TO SECOND")
-        .ok("INTERVAL '1.2' DAY TO SECOND");
-    expr("INTERVAL '1 1:2' DAY TO SECOND")
-        .ok("INTERVAL '1 1:2' DAY TO SECOND");
-    expr("INTERVAL '1 1:2:x' DAY TO SECOND")
-        .ok("INTERVAL '1 1:2:x' DAY TO SECOND");
-    expr("INTERVAL '1:2:3' DAY TO SECOND")
-        .ok("INTERVAL '1:2:3' DAY TO SECOND");
-    expr("INTERVAL '1:1:1.2' DAY TO SECOND")
-        .ok("INTERVAL '1:1:1.2' DAY TO SECOND");
-    expr("INTERVAL '1 1:2' DAY(2) TO SECOND")
-        .ok("INTERVAL '1 1:2' DAY(2) TO SECOND");
-    expr("INTERVAL '1 1' DAY(2) TO SECOND")
-        .ok("INTERVAL '1 1' DAY(2) TO SECOND");
-    expr("INTERVAL 'bogus text' DAY TO SECOND")
-        .ok("INTERVAL 'bogus text' DAY TO SECOND");
-    expr("INTERVAL '2345 6:7:8901' DAY TO SECOND(4)")
-        .ok("INTERVAL '2345 6:7:8901' DAY TO SECOND(4)");
-
-    // negative field values
-    expr("INTERVAL '--1 1:1:1' DAY TO SECOND")
-        .ok("INTERVAL '--1 1:1:1' DAY TO SECOND");
-    expr("INTERVAL '1 -1:1:1' DAY TO SECOND")
-        .ok("INTERVAL '1 -1:1:1' DAY TO SECOND");
-    expr("INTERVAL '1 1:-1:1' DAY TO SECOND")
-        .ok("INTERVAL '1 1:-1:1' DAY TO SECOND");
-    expr("INTERVAL '1 1:1:-1' DAY TO SECOND")
-        .ok("INTERVAL '1 1:1:-1' DAY TO SECOND");
-    expr("INTERVAL '1 1:1:1.-1' DAY TO SECOND")
-        .ok("INTERVAL '1 1:1:1.-1' DAY TO SECOND");
-
-    // Field value out of range
-    //  (default, explicit default, alt, neg alt, max, neg max)
-    //  plus >max value for mid/end fields
-    expr("INTERVAL '100 0' DAY TO SECOND")
-        .ok("INTERVAL '100 0' DAY TO SECOND");
-    expr("INTERVAL '100 0' DAY(2) TO SECOND")
-        .ok("INTERVAL '100 0' DAY(2) TO SECOND");
-    expr("INTERVAL '1000 0' DAY(3) TO SECOND")
-        .ok("INTERVAL '1000 0' DAY(3) TO SECOND");
-    expr("INTERVAL '-1000 0' DAY(3) TO SECOND")
-        .ok("INTERVAL '-1000 0' DAY(3) TO SECOND");
-    expr("INTERVAL '2147483648 0' DAY(10) TO SECOND")
-        .ok("INTERVAL '2147483648 0' DAY(10) TO SECOND");
-    expr("INTERVAL '-2147483648 0' DAY(10) TO SECOND")
-        .ok("INTERVAL '-2147483648 0' DAY(10) TO SECOND");
-    expr("INTERVAL '1 24:1:1' DAY TO SECOND")
-        .ok("INTERVAL '1 24:1:1' DAY TO SECOND");
-    expr("INTERVAL '1 1:60:1' DAY TO SECOND")
-        .ok("INTERVAL '1 1:60:1' DAY TO SECOND");
-    expr("INTERVAL '1 1:1:60' DAY TO SECOND")
-        .ok("INTERVAL '1 1:1:60' DAY TO SECOND");
-    expr("INTERVAL '1 1:1:1.0000001' DAY TO SECOND")
-        .ok("INTERVAL '1 1:1:1.0000001' DAY TO SECOND");
-    expr("INTERVAL '1 1:1:1.0001' DAY TO SECOND(3)")
-        .ok("INTERVAL '1 1:1:1.0001' DAY TO SECOND(3)");
-
-    // precision > maximum
-    expr("INTERVAL '1 1' DAY(11) TO SECOND")
-        .ok("INTERVAL '1 1' DAY(11) TO SECOND");
-    expr("INTERVAL '1 1' DAY TO SECOND(10)")
-        .ok("INTERVAL '1 1' DAY TO SECOND(10)");
-
-    // precision < minimum allowed)
-    // note: parser will catch negative values, here we
-    // just need to check for 0
-    expr("INTERVAL '0 0:0:0' DAY(0) TO SECOND")
-        .ok("INTERVAL '0 0:0:0' DAY(0) TO SECOND");
-    expr("INTERVAL '0 0:0:0' DAY TO SECOND(0)")
-        .ok("INTERVAL '0 0:0:0' DAY TO SECOND(0)");
-  }
-
-  /**
-   * Runs tests for INTERVAL... HOUR that should pass parser but fail
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXFailsValidation() tests.
-   */
-  public void subTestIntervalHourFailsValidation() {
-    // Qualifier - field mismatches
-    expr("INTERVAL '-' HOUR")
-        .ok("INTERVAL '-' HOUR");
-    expr("INTERVAL '1-2' HOUR")
-        .ok("INTERVAL '1-2' HOUR");
-    expr("INTERVAL '1.2' HOUR")
-        .ok("INTERVAL '1.2' HOUR");
-    expr("INTERVAL '1 2' HOUR")
-        .ok("INTERVAL '1 2' HOUR");
-    expr("INTERVAL '1:2' HOUR")
-        .ok("INTERVAL '1:2' HOUR");
-    expr("INTERVAL '1-2' HOUR(2)")
-        .ok("INTERVAL '1-2' HOUR(2)");
-    expr("INTERVAL 'bogus text' HOUR")
-        .ok("INTERVAL 'bogus text' HOUR");
-
-    // negative field values
-    expr("INTERVAL '--1' HOUR")
-        .ok("INTERVAL '--1' HOUR");
-
-    // Field value out of range
-    //  (default, explicit default, alt, neg alt, max, neg max)
-    expr("INTERVAL '100' HOUR")
-        .ok("INTERVAL '100' HOUR");
-    expr("INTERVAL '100' HOUR(2)")
-        .ok("INTERVAL '100' HOUR(2)");
-    expr("INTERVAL '1000' HOUR(3)")
-        .ok("INTERVAL '1000' HOUR(3)");
-    expr("INTERVAL '-1000' HOUR(3)")
-        .ok("INTERVAL '-1000' HOUR(3)");
-    expr("INTERVAL '2147483648' HOUR(10)")
-        .ok("INTERVAL '2147483648' HOUR(10)");
-    expr("INTERVAL '-2147483648' HOUR(10)")
-        .ok("INTERVAL '-2147483648' HOUR(10)");
-
-    // negative field values
-    expr("INTERVAL '--1' HOUR")
-        .ok("INTERVAL '--1' HOUR");
-
-    // precision > maximum
-    expr("INTERVAL '1' HOUR(11)")
-        .ok("INTERVAL '1' HOUR(11)");
-
-    // precision < minimum allowed)
-    // note: parser will catch negative values, here we
-    // just need to check for 0
-    expr("INTERVAL '0' HOUR(0)")
-        .ok("INTERVAL '0' HOUR(0)");
-  }
-
-  /**
-   * Runs tests for INTERVAL... HOUR TO MINUTE that should pass parser but
-   * fail validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXFailsValidation() tests.
-   */
-  public void subTestIntervalHourToMinuteFailsValidation() {
-    // Qualifier - field mismatches
-    expr("INTERVAL ':' HOUR TO MINUTE")
-        .ok("INTERVAL ':' HOUR TO MINUTE");
-    expr("INTERVAL '1' HOUR TO MINUTE")
-        .ok("INTERVAL '1' HOUR TO MINUTE");
-    expr("INTERVAL '1:x' HOUR TO MINUTE")
-        .ok("INTERVAL '1:x' HOUR TO MINUTE");
-    expr("INTERVAL '1.2' HOUR TO MINUTE")
-        .ok("INTERVAL '1.2' HOUR TO MINUTE");
-    expr("INTERVAL '1 2' HOUR TO MINUTE")
-        .ok("INTERVAL '1 2' HOUR TO MINUTE");
-    expr("INTERVAL '1:2:3' HOUR TO MINUTE")
-        .ok("INTERVAL '1:2:3' HOUR TO MINUTE");
-    expr("INTERVAL '1 2' HOUR(2) TO MINUTE")
-        .ok("INTERVAL '1 2' HOUR(2) TO MINUTE");
-    expr("INTERVAL 'bogus text' HOUR TO MINUTE")
-        .ok("INTERVAL 'bogus text' HOUR TO MINUTE");
-
-    // negative field values
-    expr("INTERVAL '--1:1' HOUR TO MINUTE")
-        .ok("INTERVAL '--1:1' HOUR TO MINUTE");
-    expr("INTERVAL '1:-1' HOUR TO MINUTE")
-        .ok("INTERVAL '1:-1' HOUR TO MINUTE");
-
-    // Field value out of range
-    //  (default, explicit default, alt, neg alt, max, neg max)
-    //  plus >max value for mid/end fields
-    expr("INTERVAL '100:0' HOUR TO MINUTE")
-        .ok("INTERVAL '100:0' HOUR TO MINUTE");
-    expr("INTERVAL '100:0' HOUR(2) TO MINUTE")
-        .ok("INTERVAL '100:0' HOUR(2) TO MINUTE");
-    expr("INTERVAL '1000:0' HOUR(3) TO MINUTE")
-        .ok("INTERVAL '1000:0' HOUR(3) TO MINUTE");
-    expr("INTERVAL '-1000:0' HOUR(3) TO MINUTE")
-        .ok("INTERVAL '-1000:0' HOUR(3) TO MINUTE");
-    expr("INTERVAL '2147483648:0' HOUR(10) TO MINUTE")
-        .ok("INTERVAL '2147483648:0' HOUR(10) TO MINUTE");
-    expr("INTERVAL '-2147483648:0' HOUR(10) TO MINUTE")
-        .ok("INTERVAL '-2147483648:0' HOUR(10) TO MINUTE");
-    expr("INTERVAL '1:24' HOUR TO MINUTE")
-        .ok("INTERVAL '1:24' HOUR TO MINUTE");
-
-    // precision > maximum
-    expr("INTERVAL '1:1' HOUR(11) TO MINUTE")
-        .ok("INTERVAL '1:1' HOUR(11) TO MINUTE");
-
-    // precision < minimum allowed)
-    // note: parser will catch negative values, here we
-    // just need to check for 0
-    expr("INTERVAL '0:0' HOUR(0) TO MINUTE")
-        .ok("INTERVAL '0:0' HOUR(0) TO MINUTE");
-  }
-
-  /**
-   * Runs tests for INTERVAL... HOUR TO SECOND that should pass parser but
-   * fail validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXFailsValidation() tests.
-   */
-  public void subTestIntervalHourToSecondFailsValidation() {
-    // Qualifier - field mismatches
-    expr("INTERVAL '::' HOUR TO SECOND")
-        .ok("INTERVAL '::' HOUR TO SECOND");
-    expr("INTERVAL '::.' HOUR TO SECOND")
-        .ok("INTERVAL '::.' HOUR TO SECOND");
-    expr("INTERVAL '1' HOUR TO SECOND")
-        .ok("INTERVAL '1' HOUR TO SECOND");
-    expr("INTERVAL '1 2' HOUR TO SECOND")
-        .ok("INTERVAL '1 2' HOUR TO SECOND");
-    expr("INTERVAL '1:2' HOUR TO SECOND")
-        .ok("INTERVAL '1:2' HOUR TO SECOND");
-    expr("INTERVAL '1.2' HOUR TO SECOND")
-        .ok("INTERVAL '1.2' HOUR TO SECOND");
-    expr("INTERVAL '1 1:2' HOUR TO SECOND")
-        .ok("INTERVAL '1 1:2' HOUR TO SECOND");
-    expr("INTERVAL '1:2:x' HOUR TO SECOND")
-        .ok("INTERVAL '1:2:x' HOUR TO SECOND");
-    expr("INTERVAL '1:x:3' HOUR TO SECOND")
-        .ok("INTERVAL '1:x:3' HOUR TO SECOND");
-    expr("INTERVAL '1:1:1.x' HOUR TO SECOND")
-        .ok("INTERVAL '1:1:1.x' HOUR TO SECOND");
-    expr("INTERVAL '1 1:2' HOUR(2) TO SECOND")
-        .ok("INTERVAL '1 1:2' HOUR(2) TO SECOND");
-    expr("INTERVAL '1 1' HOUR(2) TO SECOND")
-        .ok("INTERVAL '1 1' HOUR(2) TO SECOND");
-    expr("INTERVAL 'bogus text' HOUR TO SECOND")
-        .ok("INTERVAL 'bogus text' HOUR TO SECOND");
-    expr("INTERVAL '6:7:8901' HOUR TO SECOND(4)")
-        .ok("INTERVAL '6:7:8901' HOUR TO SECOND(4)");
-
-    // negative field values
-    expr("INTERVAL '--1:1:1' HOUR TO SECOND")
-        .ok("INTERVAL '--1:1:1' HOUR TO SECOND");
-    expr("INTERVAL '1:-1:1' HOUR TO SECOND")
-        .ok("INTERVAL '1:-1:1' HOUR TO SECOND");
-    expr("INTERVAL '1:1:-1' HOUR TO SECOND")
-        .ok("INTERVAL '1:1:-1' HOUR TO SECOND");
-    expr("INTERVAL '1:1:1.-1' HOUR TO SECOND")
-        .ok("INTERVAL '1:1:1.-1' HOUR TO SECOND");
-
-    // Field value out of range
-    //  (default, explicit default, alt, neg alt, max, neg max)
-    //  plus >max value for mid/end fields
-    expr("INTERVAL '100:0:0' HOUR TO SECOND")
-        .ok("INTERVAL '100:0:0' HOUR TO SECOND");
-    expr("INTERVAL '100:0:0' HOUR(2) TO SECOND")
-        .ok("INTERVAL '100:0:0' HOUR(2) TO SECOND");
-    expr("INTERVAL '1000:0:0' HOUR(3) TO SECOND")
-        .ok("INTERVAL '1000:0:0' HOUR(3) TO SECOND");
-    expr("INTERVAL '-1000:0:0' HOUR(3) TO SECOND")
-        .ok("INTERVAL '-1000:0:0' HOUR(3) TO SECOND");
-    expr("INTERVAL '2147483648:0:0' HOUR(10) TO SECOND")
-        .ok("INTERVAL '2147483648:0:0' HOUR(10) TO SECOND");
-    expr("INTERVAL '-2147483648:0:0' HOUR(10) TO SECOND")
-        .ok("INTERVAL '-2147483648:0:0' HOUR(10) TO SECOND");
-    expr("INTERVAL '1:60:1' HOUR TO SECOND")
-        .ok("INTERVAL '1:60:1' HOUR TO SECOND");
-    expr("INTERVAL '1:1:60' HOUR TO SECOND")
-        .ok("INTERVAL '1:1:60' HOUR TO SECOND");
-    expr("INTERVAL '1:1:1.0000001' HOUR TO SECOND")
-        .ok("INTERVAL '1:1:1.0000001' HOUR TO SECOND");
-    expr("INTERVAL '1:1:1.0001' HOUR TO SECOND(3)")
-        .ok("INTERVAL '1:1:1.0001' HOUR TO SECOND(3)");
-
-    // precision > maximum
-    expr("INTERVAL '1:1:1' HOUR(11) TO SECOND")
-        .ok("INTERVAL '1:1:1' HOUR(11) TO SECOND");
-    expr("INTERVAL '1:1:1' HOUR TO SECOND(10)")
-        .ok("INTERVAL '1:1:1' HOUR TO SECOND(10)");
-
-    // precision < minimum allowed)
-    // note: parser will catch negative values, here we
-    // just need to check for 0
-    expr("INTERVAL '0:0:0' HOUR(0) TO SECOND")
-        .ok("INTERVAL '0:0:0' HOUR(0) TO SECOND");
-    expr("INTERVAL '0:0:0' HOUR TO SECOND(0)")
-        .ok("INTERVAL '0:0:0' HOUR TO SECOND(0)");
-  }
-
-  /**
-   * Runs tests for INTERVAL... MINUTE that should pass parser but fail
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXFailsValidation() tests.
-   */
-  public void subTestIntervalMinuteFailsValidation() {
-    // Qualifier - field mismatches
-    expr("INTERVAL '-' MINUTE")
-        .ok("INTERVAL '-' MINUTE");
-    expr("INTERVAL '1-2' MINUTE")
-        .ok("INTERVAL '1-2' MINUTE");
-    expr("INTERVAL '1.2' MINUTE")
-        .ok("INTERVAL '1.2' MINUTE");
-    expr("INTERVAL '1 2' MINUTE")
-        .ok("INTERVAL '1 2' MINUTE");
-    expr("INTERVAL '1:2' MINUTE")
-        .ok("INTERVAL '1:2' MINUTE");
-    expr("INTERVAL '1-2' MINUTE(2)")
-        .ok("INTERVAL '1-2' MINUTE(2)");
-    expr("INTERVAL 'bogus text' MINUTE")
-        .ok("INTERVAL 'bogus text' MINUTE");
-
-    // negative field values
-    expr("INTERVAL '--1' MINUTE")
-        .ok("INTERVAL '--1' MINUTE");
-
-    // Field value out of range
-    //  (default, explicit default, alt, neg alt, max, neg max)
-    expr("INTERVAL '100' MINUTE")
-        .ok("INTERVAL '100' MINUTE");
-    expr("INTERVAL '100' MINUTE(2)")
-        .ok("INTERVAL '100' MINUTE(2)");
-    expr("INTERVAL '1000' MINUTE(3)")
-        .ok("INTERVAL '1000' MINUTE(3)");
-    expr("INTERVAL '-1000' MINUTE(3)")
-        .ok("INTERVAL '-1000' MINUTE(3)");
-    expr("INTERVAL '2147483648' MINUTE(10)")
-        .ok("INTERVAL '2147483648' MINUTE(10)");
-    expr("INTERVAL '-2147483648' MINUTE(10)")
-        .ok("INTERVAL '-2147483648' MINUTE(10)");
-
-    // precision > maximum
-    expr("INTERVAL '1' MINUTE(11)")
-        .ok("INTERVAL '1' MINUTE(11)");
-
-    // precision < minimum allowed)
-    // note: parser will catch negative values, here we
-    // just need to check for 0
-    expr("INTERVAL '0' MINUTE(0)")
-        .ok("INTERVAL '0' MINUTE(0)");
-  }
-
-  /**
-   * Runs tests for INTERVAL... MINUTE TO SECOND that should pass parser but
-   * fail validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXFailsValidation() tests.
-   */
-  public void subTestIntervalMinuteToSecondFailsValidation() {
-    // Qualifier - field mismatches
-    expr("INTERVAL ':' MINUTE TO SECOND")
-        .ok("INTERVAL ':' MINUTE TO SECOND");
-    expr("INTERVAL ':.' MINUTE TO SECOND")
-        .ok("INTERVAL ':.' MINUTE TO SECOND");
-    expr("INTERVAL '1' MINUTE TO SECOND")
-        .ok("INTERVAL '1' MINUTE TO SECOND");
-    expr("INTERVAL '1 2' MINUTE TO SECOND")
-        .ok("INTERVAL '1 2' MINUTE TO SECOND");
-    expr("INTERVAL '1.2' MINUTE TO SECOND")
-        .ok("INTERVAL '1.2' MINUTE TO SECOND");
-    expr("INTERVAL '1 1:2' MINUTE TO SECOND")
-        .ok("INTERVAL '1 1:2' MINUTE TO SECOND");
-    expr("INTERVAL '1:x' MINUTE TO SECOND")
-        .ok("INTERVAL '1:x' MINUTE TO SECOND");
-    expr("INTERVAL 'x:3' MINUTE TO SECOND")
-        .ok("INTERVAL 'x:3' MINUTE TO SECOND");
-    expr("INTERVAL '1:1.x' MINUTE TO SECOND")
-        .ok("INTERVAL '1:1.x' MINUTE TO SECOND");
-    expr("INTERVAL '1 1:2' MINUTE(2) TO SECOND")
-        .ok("INTERVAL '1 1:2' MINUTE(2) TO SECOND");
-    expr("INTERVAL '1 1' MINUTE(2) TO SECOND")
-        .ok("INTERVAL '1 1' MINUTE(2) TO SECOND");
-    expr("INTERVAL 'bogus text' MINUTE TO SECOND")
-        .ok("INTERVAL 'bogus text' MINUTE TO SECOND");
-    expr("INTERVAL '7:8901' MINUTE TO SECOND(4)")
-        .ok("INTERVAL '7:8901' MINUTE TO SECOND(4)");
-
-    // negative field values
-    expr("INTERVAL '--1:1' MINUTE TO SECOND")
-        .ok("INTERVAL '--1:1' MINUTE TO SECOND");
-    expr("INTERVAL '1:-1' MINUTE TO SECOND")
-        .ok("INTERVAL '1:-1' MINUTE TO SECOND");
-    expr("INTERVAL '1:1.-1' MINUTE TO SECOND")
-        .ok("INTERVAL '1:1.-1' MINUTE TO SECOND");
-
-    // Field value out of range
-    //  (default, explicit default, alt, neg alt, max, neg max)
-    //  plus >max value for mid/end fields
-    expr("INTERVAL '100:0' MINUTE TO SECOND")
-        .ok("INTERVAL '100:0' MINUTE TO SECOND");
-    expr("INTERVAL '100:0' MINUTE(2) TO SECOND")
-        .ok("INTERVAL '100:0' MINUTE(2) TO SECOND");
-    expr("INTERVAL '1000:0' MINUTE(3) TO SECOND")
-        .ok("INTERVAL '1000:0' MINUTE(3) TO SECOND");
-    expr("INTERVAL '-1000:0' MINUTE(3) TO SECOND")
-        .ok("INTERVAL '-1000:0' MINUTE(3) TO SECOND");
-    expr("INTERVAL '2147483648:0' MINUTE(10) TO SECOND")
-        .ok("INTERVAL '2147483648:0' MINUTE(10) TO SECOND");
-    expr("INTERVAL '-2147483648:0' MINUTE(10) TO SECOND")
-        .ok("INTERVAL '-2147483648:0' MINUTE(10) TO SECOND");
-    expr("INTERVAL '1:60' MINUTE TO SECOND")
-        .ok("INTERVAL '1:60' MINUTE TO SECOND");
-    expr("INTERVAL '1:1.0000001' MINUTE TO SECOND")
-        .ok("INTERVAL '1:1.0000001' MINUTE TO SECOND");
-    expr("INTERVAL '1:1:1.0001' MINUTE TO SECOND(3)")
-        .ok("INTERVAL '1:1:1.0001' MINUTE TO SECOND(3)");
-
-    // precision > maximum
-    expr("INTERVAL '1:1' MINUTE(11) TO SECOND")
-        .ok("INTERVAL '1:1' MINUTE(11) TO SECOND");
-    expr("INTERVAL '1:1' MINUTE TO SECOND(10)")
-        .ok("INTERVAL '1:1' MINUTE TO SECOND(10)");
-
-    // precision < minimum allowed)
-    // note: parser will catch negative values, here we
-    // just need to check for 0
-    expr("INTERVAL '0:0' MINUTE(0) TO SECOND")
-        .ok("INTERVAL '0:0' MINUTE(0) TO SECOND");
-    expr("INTERVAL '0:0' MINUTE TO SECOND(0)")
-        .ok("INTERVAL '0:0' MINUTE TO SECOND(0)");
-  }
-
-  /**
-   * Runs tests for INTERVAL... SECOND that should pass parser but fail
-   * validator. A substantially identical set of tests exists in
-   * SqlValidatorTest, and any changes here should be synchronized there.
-   * Similarly, any changes to tests here should be echoed appropriately to
-   * each of the other 12 subTestIntervalXXXFailsValidation() tests.
-   */
-  public void subTestIntervalSecondFailsValidation() {
-    // Qualifier - field mismatches
-    expr("INTERVAL ':' SECOND")
-        .ok("INTERVAL ':' SECOND");
-    expr("INTERVAL '.' SECOND")
-        .ok("INTERVAL '.' SECOND");
-    expr("INTERVAL '1-2' SECOND")
-        .ok("INTERVAL '1-2' SECOND");
-    expr("INTERVAL '1.x' SECOND")
-        .ok("INTERVAL '1.x' SECOND");
-    expr("INTERVAL 'x.1' SECOND")
-        .ok("INTERVAL 'x.1' SECOND");
-    expr("INTERVAL '1 2' SECOND")
-        .ok("INTERVAL '1 2' SECOND");
-    expr("INTERVAL '1:2' SECOND")
-        .ok("INTERVAL '1:2' SECOND");
-    expr("INTERVAL '1-2' SECOND(2)")
-        .ok("INTERVAL '1-2' SECOND(2)");
-    expr("INTERVAL 'bogus text' SECOND")
-        .ok("INTERVAL 'bogus text' SECOND");
-
-    // negative field values
-    expr("INTERVAL '--1' SECOND")
-        .ok("INTERVAL '--1' SECOND");
-    expr("INTERVAL '1.-1' SECOND")
-        .ok("INTERVAL '1.-1' SECOND");
-
-    // Field value out of range
-    //  (default, explicit default, alt, neg alt, max, neg max)
-    expr("INTERVAL '100' SECOND")
-        .ok("INTERVAL '100' SECOND");
-    expr("INTERVAL '100' SECOND(2)")
-        .ok("INTERVAL '100' SECOND(2)");
-    expr("INTERVAL '1000' SECOND(3)")
-        .ok("INTERVAL '1000' SECOND(3)");
-    expr("INTERVAL '-1000' SECOND(3)")
-        .ok("INTERVAL '-1000' SECOND(3)");
-    expr("INTERVAL '2147483648' SECOND(10)")
-        .ok("INTERVAL '2147483648' SECOND(10)");
-    expr("INTERVAL '-2147483648' SECOND(10)")
-        .ok("INTERVAL '-2147483648' SECOND(10)");
-    expr("INTERVAL '1.0000001' SECOND")
-        .ok("INTERVAL '1.0000001' SECOND");
-    expr("INTERVAL '1.0000001' SECOND(2)")
-        .ok("INTERVAL '1.0000001' SECOND(2)");
-    expr("INTERVAL '1.0001' SECOND(2, 3)")
-        .ok("INTERVAL '1.0001' SECOND(2, 3)");
-    expr("INTERVAL '1.000000001' SECOND(2, 9)")
-        .ok("INTERVAL '1.000000001' SECOND(2, 9)");
-
-    // precision > maximum
-    expr("INTERVAL '1' SECOND(11)")
-        .ok("INTERVAL '1' SECOND(11)");
-    expr("INTERVAL '1.1' SECOND(1, 10)")
-        .ok("INTERVAL '1.1' SECOND(1, 10)");
-
-    // precision < minimum allowed)
-    // note: parser will catch negative values, here we
-    // just need to check for 0
-    expr("INTERVAL '0' SECOND(0)")
-        .ok("INTERVAL '0' SECOND(0)");
-    expr("INTERVAL '0' SECOND(1, 0)")
-        .ok("INTERVAL '0' SECOND(1, 0)");
-  }
-
-  /**
    * Runs tests for each of the thirteen different main types of INTERVAL
    * qualifiers (YEAR, YEAR TO MONTH, etc.) Tests in this section fall into
    * two categories:
@@ -7012,33 +6308,37 @@ public class SqlParserTest {
    * any changes here should be synchronized there.
    */
   @Test void testIntervalLiterals() {
-    subTestIntervalYearPositive();
-    subTestIntervalYearToMonthPositive();
-    subTestIntervalMonthPositive();
-    subTestIntervalDayPositive();
-    subTestIntervalDayToHourPositive();
-    subTestIntervalDayToMinutePositive();
-    subTestIntervalDayToSecondPositive();
-    subTestIntervalHourPositive();
-    subTestIntervalHourToMinutePositive();
-    subTestIntervalHourToSecondPositive();
-    subTestIntervalMinutePositive();
-    subTestIntervalMinuteToSecondPositive();
-    subTestIntervalSecondPositive();
+    final SqlParserFixture f = fixture();
+    final IntervalTest.Fixture intervalFixture = new IntervalTest.Fixture() {
+      @Override public IntervalTest.Fixture2 expr(String sql) {
+        final SqlParserFixture f2 = f.sql(sql).expression(true);
+        return getFixture2(f2, f2.sap.sql);
+      }
 
-    subTestIntervalYearFailsValidation();
-    subTestIntervalYearToMonthFailsValidation();
-    subTestIntervalMonthFailsValidation();
-    subTestIntervalDayFailsValidation();
-    subTestIntervalDayToHourFailsValidation();
-    subTestIntervalDayToMinuteFailsValidation();
-    subTestIntervalDayToSecondFailsValidation();
-    subTestIntervalHourFailsValidation();
-    subTestIntervalHourToMinuteFailsValidation();
-    subTestIntervalHourToSecondFailsValidation();
-    subTestIntervalMinuteFailsValidation();
-    subTestIntervalMinuteToSecondFailsValidation();
-    subTestIntervalSecondFailsValidation();
+      @Override public IntervalTest.Fixture2 wholeExpr(String sql) {
+        return expr(sql);
+      }
+
+      private IntervalTest.Fixture2 getFixture2(SqlParserFixture f2,
+          String expectedSql) {
+        return new IntervalTest.Fixture2() {
+          @Override public void fails(String message) {
+            f2.compare(expectedSql);
+          }
+
+          @Override public void columnType(String expectedType) {
+            f2.compare(expectedSql);
+          }
+
+          @Override public IntervalTest.Fixture2 assertParse(
+              String expectedSql) {
+            return getFixture2(f2, expectedSql);
+          }
+        };
+      }
+    };
+
+    new IntervalTest(intervalFixture).testAll();
   }
 
   @Test void testUnparseableIntervalQualifiers() {
@@ -7054,8 +6354,12 @@ public class SqlParserTest {
             + "    \"MINUTES\" \\.\\.\\.\n"
             + "    \"MONTH\" \\.\\.\\.\n"
             + "    \"MONTHS\" \\.\\.\\.\n"
+            + "    \"QUARTER\" \\.\\.\\.\n"
+            + "    \"QUARTERS\" \\.\\.\\.\n"
             + "    \"SECOND\" \\.\\.\\.\n"
             + "    \"SECONDS\" \\.\\.\\.\n"
+            + "    \"WEEK\" \\.\\.\\.\n"
+            + "    \"WEEKS\" \\.\\.\\.\n"
             + "    \"YEAR\" \\.\\.\\.\n"
             + "    \"YEARS\" \\.\\.\\.\n"
             + "    ");
@@ -7420,8 +6724,6 @@ public class SqlParserTest {
         .fails(ANY);
     expr("INTERVAL '10' ^DECADE^")
         .fails(ANY);
-    expr("INTERVAL '4' ^QUARTER^")
-        .fails(ANY);
   }
 
   /** Tests that plural time units are allowed when not in strict mode. */
@@ -7456,7 +6758,7 @@ public class SqlParserTest {
       messages.add("Warning: use of non-standard feature '" + token + "'");
     }
     return throwables -> {
-      assertThat(throwables.size(), is(messages.size()));
+      assertThat(throwables, hasSize(messages.size()));
       for (Pair<? extends Throwable, String> pair : Pair.zip(throwables, messages)) {
         assertThat(pair.left.getMessage(), containsString(pair.right));
       }
@@ -7566,6 +6868,47 @@ public class SqlParserTest {
         .fails("(?s)Encountered \"to\".*");
   }
 
+  /** Tests that EXTRACT, FLOOR, CEIL, DATE_TRUNC functions accept abbreviations for
+   * time units (such as "Y" for "YEAR") when configured via
+   * {@link Config#timeUnitCodes()}. */
+  @Test protected void testTimeUnitCodes() {
+    // YEAR is a built-in time frame. When unparsed, it looks like a keyword.
+    // (Note no backticks around YEAR.)
+    expr("floor(d to year)")
+        .ok("FLOOR(`D` TO YEAR)");
+    // Y is an extension time frame. (Or rather, it could be, if you configure
+    // it.) When unparsed, it looks like an identifier (backticks around Y.)
+    expr("floor(d to y)")
+        .ok("FLOOR(`D` TO `Y`)");
+
+    // As for FLOOR, so for CEIL.
+    expr("ceil(d to year)").ok("CEIL(`D` TO YEAR)");
+    expr("ceil(d to y)").ok("CEIL(`D` TO `Y`)");
+
+    // CEILING is a synonym for CEIL.
+    expr("ceiling(d to year)").ok("CEIL(`D` TO YEAR)");
+    expr("ceiling(d to y)").ok("CEIL(`D` TO `Y`)");
+
+    // As for FLOOR, so for EXTRACT.
+    expr("extract(year from d)").ok("EXTRACT(YEAR FROM `D`)");
+    expr("extract(y from d)").ok("EXTRACT(`Y` FROM `D`)");
+
+    // MICROSECOND, NANOSECOND used to be native for EXTRACT but not for FLOOR
+    // or CEIL. Now they are native, and so appear as keywords, without
+    // backticks.
+    expr("floor(d to nanosecond)").ok("FLOOR(`D` TO NANOSECOND)");
+    expr("floor(d to microsecond)").ok("FLOOR(`D` TO MICROSECOND)");
+    expr("ceil(d to nanosecond)").ok("CEIL(`D` TO NANOSECOND)");
+    expr("ceiling(d to microsecond)").ok("CEIL(`D` TO MICROSECOND)");
+    expr("extract(nanosecond from d)").ok("EXTRACT(NANOSECOND FROM `D`)");
+    expr("extract(microsecond from d)").ok("EXTRACT(MICROSECOND FROM `D`)");
+
+    // As for FLOOR, so for DATE_TRUNC.
+    expr("date_trunc(d , year)").ok("(DATE_TRUNC(`D`, YEAR))");
+    expr("date_trunc(d , y)").ok("(DATE_TRUNC(`D`, `Y`))");
+    expr("date_trunc(d , week(tuesday))").ok("(DATE_TRUNC(`D`, `WEEK_TUESDAY`))");
+  }
+
   @Test void testGeometry() {
     expr("cast(null as ^geometry^)")
         .fails("Geo-spatial extensions and the GEOMETRY data type are not enabled");
@@ -7657,58 +7000,85 @@ public class SqlParserTest {
         .ok("CAST(`X` AS VARBINARY)");
   }
 
-  @Test void testTimestampAddAndDiff() {
-    Map<String, List<String>> tsi = ImmutableMap.<String, List<String>>builder()
-        .put("MICROSECOND",
-            Arrays.asList("FRAC_SECOND", "MICROSECOND", "SQL_TSI_MICROSECOND"))
-        .put("NANOSECOND", Arrays.asList("NANOSECOND", "SQL_TSI_FRAC_SECOND"))
-        .put("SECOND", Arrays.asList("SECOND", "SQL_TSI_SECOND"))
-        .put("MINUTE", Arrays.asList("MINUTE", "SQL_TSI_MINUTE"))
-        .put("HOUR", Arrays.asList("HOUR", "SQL_TSI_HOUR"))
-        .put("DAY", Arrays.asList("DAY", "SQL_TSI_DAY"))
-        .put("WEEK", Arrays.asList("WEEK", "SQL_TSI_WEEK"))
-        .put("MONTH", Arrays.asList("MONTH", "SQL_TSI_MONTH"))
-        .put("QUARTER", Arrays.asList("QUARTER", "SQL_TSI_QUARTER"))
-        .put("YEAR", Arrays.asList("YEAR", "SQL_TSI_YEAR"))
-        .build();
-
-    List<String> functions = ImmutableList.<String>builder()
-        .add("timestampadd(%1$s, 12, current_timestamp)")
-        .add("timestampdiff(%1$s, current_timestamp, current_timestamp)")
-        .build();
-
-    for (Map.Entry<String, List<String>> intervalGroup : tsi.entrySet()) {
-      for (String function : functions) {
-        for (String interval : intervalGroup.getValue()) {
-          expr(String.format(Locale.ROOT, function, interval, ""))
-              .ok(String.format(Locale.ROOT, function, intervalGroup.getKey(), "`")
-                  .toUpperCase(Locale.ROOT));
-        }
-      }
-    }
-
-    expr("timestampadd(^incorrect^, 1, current_timestamp)")
-        .fails("(?s).*Was expecting one of.*");
-    expr("timestampdiff(^incorrect^, current_timestamp, current_timestamp)")
-        .fails("(?s).*Was expecting one of.*");
-  }
-
   @Test void testTimestampAdd() {
     final String sql = "select * from t\n"
-        + "where timestampadd(sql_tsi_month, 5, hiredate) < curdate";
+        + "where timestampadd(month, 5, hiredate) < curdate";
     final String expected = "SELECT *\n"
         + "FROM `T`\n"
         + "WHERE (TIMESTAMPADD(MONTH, 5, `HIREDATE`) < `CURDATE`)";
     sql(sql).ok(expected);
+
+    // SQL_TSI_MONTH is treated as a user-defined time frame, hence appears as
+    // an identifier (with backticks) when unparsed. It will be resolved to
+    // MICROSECOND during validation.
+    final String sql2 = "select * from t\n"
+        + "where timestampadd(sql_tsi_month, 5, hiredate) < curdate";
+    final String expected2 = "SELECT *\n"
+        + "FROM `T`\n"
+        + "WHERE (TIMESTAMPADD(`SQL_TSI_MONTH`, 5, `HIREDATE`) < `CURDATE`)";
+    sql(sql2).ok(expected2);
+
+    // Previously a parse error, now an identifier that the validator will find
+    // to be invalid.
+    expr("timestampadd(incorrect, 1, current_timestamp)")
+        .ok("TIMESTAMPADD(`INCORRECT`, 1, CURRENT_TIMESTAMP)");
   }
 
   @Test void testTimestampDiff() {
     final String sql = "select * from t\n"
-        + "where timestampdiff(frac_second, 5, hiredate) < curdate";
+        + "where timestampdiff(microsecond, 5, hiredate) < curdate";
     final String expected = "SELECT *\n"
         + "FROM `T`\n"
         + "WHERE (TIMESTAMPDIFF(MICROSECOND, 5, `HIREDATE`) < `CURDATE`)";
     sql(sql).ok(expected);
+
+    // FRAC_SECOND is treated as a user-defined time frame, hence appears as
+    // an identifier (with backticks) when unparsed. It will be resolved to
+    // MICROSECOND during validation.
+    final String sql2 = "select * from t\n"
+        + "where timestampdiff(frac_second, 5, hiredate) < curdate";
+    final String expected2 = "SELECT *\n"
+        + "FROM `T`\n"
+        + "WHERE (TIMESTAMPDIFF(`FRAC_SECOND`, 5, `HIREDATE`) < `CURDATE`)";
+    sql(sql2).ok(expected2);
+
+    // Previously a parse error, now an identifier that the validator will find
+    // to be invalid.
+    expr("timestampdiff(incorrect, current_timestamp, current_timestamp)")
+        .ok("TIMESTAMPDIFF(`INCORRECT`, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)");
+  }
+
+  @Test void testTimeTrunc() {
+    final String sql = "select time_trunc(TIME '15:30:00', hour) from t";
+    final String expected = "SELECT TIME_TRUNC(TIME '15:30:00', HOUR)\n"
+        + "FROM `T`";
+    sql(sql).ok(expected);
+
+    // Syntactically valid; validator will complain because WEEK is for DATE or
+    // TIMESTAMP but not for TIME.
+    final String sql2 = "select time_trunc(time '15:30:00', week) from t";
+    final String expected2 = "SELECT TIME_TRUNC(TIME '15:30:00', WEEK)\n"
+        + "FROM `T`";
+    sql(sql2).ok(expected2);
+
+    // note backticks
+    final String sql3 = "select time_trunc(time '15:30:00', incorrect) from t";
+    final String expected3 = "SELECT TIME_TRUNC(TIME '15:30:00', `INCORRECT`)\n"
+        + "FROM `T`";
+    sql(sql3).ok(expected3);
+  }
+
+  @Test void testTimestampTrunc() {
+    final String sql = "select timestamp_trunc(timestamp '2008-12-25 15:30:00', week) from t";
+    final String expected = "SELECT TIMESTAMP_TRUNC(TIMESTAMP '2008-12-25 15:30:00', WEEK)\n"
+        + "FROM `T`";
+    sql(sql).ok(expected);
+
+    // note backticks
+    final String sql3 = "select timestamp_trunc(time '15:30:00', incorrect) from t";
+    String expected3 = "SELECT TIMESTAMP_TRUNC(TIME '15:30:00', `INCORRECT`)\n"
+        + "FROM `T`";
+    sql(sql3).ok(expected3);
   }
 
   @Test void testUnnest() {
@@ -7770,28 +7140,226 @@ public class SqlParserTest {
   @Test void testParensInFrom() {
     // UNNEST may not occur within parentheses.
     // FIXME should fail at "unnest"
-    sql("select *from ^(^unnest(x))")
-        .fails("(?s)Encountered \"\\( unnest\" at .*");
+    sql("select *from (^unnest(x)^)")
+        .fails("Expected query or join");
 
     // <table-name> may not occur within parentheses.
+    // TODO: Postgres gives "syntax error at ')'", which might be better
     sql("select * from (^emp^)")
-        .fails("(?s)Non-query expression encountered in illegal context.*");
+        .fails("(?s)Expected query or join.*");
 
     // <table-name> may not occur within parentheses.
-    sql("select * from (^emp^ as x)")
-        .fails("(?s)Non-query expression encountered in illegal context.*");
+    // TODO: Postgres gives "syntax error at ')'", which might be better
+    sql("select * from (^emp as x^)")
+        .fails("Expected query or join");
 
     // <table-name> may not occur within parentheses.
     sql("select * from (^emp^) as x")
-        .fails("(?s)Non-query expression encountered in illegal context.*");
+        .fails("Expected query or join");
 
     // Parentheses around JOINs are OK, and sometimes necessary.
-    if (false) {
-      // todo:
-      sql("select * from (emp join dept using (deptno))").ok("xx");
+    String sql1 = "select *\n"
+        + "from (emp join dept using (deptno))";
+    String expected = "SELECT *\n"
+        + "FROM `EMP`\n"
+        + "INNER JOIN `DEPT` USING (`DEPTNO`)";
+    sql(sql1).ok(expected);
 
-      sql("select * from (emp join dept using (deptno)) join foo using (x)").ok("xx");
-    }
+    String sql2 = "select *\n"
+        + "from (emp join dept using (deptno))\n"
+        + "join foo using (x)";
+    String expected2 = "SELECT *\n"
+        + "FROM `EMP`\n"
+        + "INNER JOIN `DEPT` USING (`DEPTNO`)\n"
+        + "INNER JOIN `FOO` USING (`X`)";
+    sql(sql2).ok(expected2);
+
+    // In Postgres and Standard SQL, you can alias a join:
+    //   "select x.i from (t cross join u) as x"
+    // is syntactically and semantically valid; but
+    //   "select t.i from (t cross join u) as x"
+    // is semantically invalid.
+    // TODO: Support this in Calcite.
+    sql("select * from (t cross ^join^ u) as x")
+        .fails("Join expression encountered in illegal context");
+    sql("select *\n"
+        + "from (t cross ^join^ u)\n"
+        + "  tablesample substitute('medium')")
+        .fails("Join expression encountered in illegal context");
+    sql("select *\n"
+        + "from (t cross ^join^ u)\n"
+        + "PIVOT (sum(sal) AS sal FOR job in ('CLERK' AS c))")
+        .fails("Join expression encountered in illegal context");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-35">[CALCITE-35]
+   * Support parenthesized sub-clause in JOIN</a>. */
+  @Test void testParenthesizedJoins() {
+    final String sql = "SELECT * FROM "
+        + "(((S.C c INNER JOIN S.N n ON n.id = c.id) "
+        + "INNER JOIN S.A a ON (NOT a.isactive)) "
+        + "INNER JOIN S.T t ON t.id = a.id)";
+    final String expected = "SELECT *\n"
+        + "FROM `S`.`C` AS `C`\n"
+        + "INNER JOIN `S`.`N` AS `N` ON (`N`.`ID` = `C`.`ID`)\n"
+        + "INNER JOIN `S`.`A` AS `A` ON (NOT `A`.`ISACTIVE`)\n"
+        + "INNER JOIN `S`.`T` AS `T` ON (`T`.`ID` = `A`.`ID`)";
+    sql(sql).ok(expected);
+
+    final String sql2 = "select *\n"
+        + "from a\n"
+        + " join (b join c on b.x = c.x)\n"
+        + " on a.y = c.y";
+    final String expected2 = "SELECT *\n"
+        + "FROM `A`\n"
+        + "INNER JOIN (`B` INNER JOIN `C` ON (`B`.`X` = `C`.`X`))"
+        + " ON (`A`.`Y` = `C`.`Y`)";
+    sql(sql2).ok(expected2);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5194">[CALCITE-5194]
+   * Cannot parse parenthesized UNION in FROM</a>. */
+  @Test void testParenthesizedUnionInFrom() {
+    final String sql = "select *\n"
+        + "from (\n"
+        + "  (select x from a)\n"
+        + "  union\n"
+        + "  (select y from b))";
+    final String expected = "SELECT *\n"
+        + "FROM (SELECT `X`\n"
+        + "FROM `A`\n"
+        + "UNION\n"
+        + "SELECT `Y`\n"
+        + "FROM `B`)";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testParenthesizedUnionAndJoinInFrom() {
+    final String sql = "select *\n"
+        + "from (\n"
+        + "  (select x from a) as a"
+        + "  cross join\n"
+        + "  (select x from a\n"
+        + "  union\n"
+        + "  select y from b) as b)";
+    final String expected = "SELECT *\n"
+        + "FROM (SELECT `X`\n"
+        + "FROM `A`) AS `A`\n"
+        + "CROSS JOIN (SELECT `X`\n"
+        + "FROM `A`\n"
+        + "UNION\n"
+        + "SELECT `Y`\n"
+        + "FROM `B`) AS `B`";
+    sql(sql).ok(expected);
+  }
+
+  /** As {@link #testParenthesizedUnionAndJoinInFrom()}
+   * but the UNION is the first input to the JOIN. */
+  @Test void testParenthesizedUnionAndJoinInFrom2() {
+    final String sql = "select *\n"
+        + "from (\n"
+        + "  (select x from a\n"
+        + "  union\n"
+        + "  select y from b) as b\n"
+        + "  cross join\n"
+        + "  (select x from a) as a)";
+    final String expected = "SELECT *\n"
+        + "FROM (SELECT `X`\n"
+        + "FROM `A`\n"
+        + "UNION\n"
+        + "SELECT `Y`\n"
+        + "FROM `B`) AS `B`\n"
+        + "CROSS JOIN (SELECT `X`\n"
+        + "FROM `A`) AS `A`";
+    sql(sql).ok(expected);
+  }
+
+  /** As {@link #testParenthesizedUnionAndJoinInFrom2()}
+   * but INNER JOIN rather than CROSS JOIN. */
+  @Test void testParenthesizedUnionAndJoinInFrom3() {
+    final String sql = "select *\n"
+        + "from (\n"
+        + "  (select x from a\n"
+        + "  union\n"
+        + "  select y from b) as b\n"
+        + "  join\n"
+        + "  (select x from a) as a on b.x = a.x)";
+    final String expected = "SELECT *\n"
+        + "FROM (SELECT `X`\n"
+        + "FROM `A`\n"
+        + "UNION\n"
+        + "SELECT `Y`\n"
+        + "FROM `B`) AS `B`\n"
+        + "INNER JOIN (SELECT `X`\n"
+        + "FROM `A`) AS `A` ON (`B`.`X` = `A`.`X`)";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testParenthesizedUnion() {
+    final String sql = "(select x from a\n"
+        + "  union\n"
+        + "  select y from b)\n"
+        + "except\n"
+        + "(select z from c)";
+    final String expected = "SELECT `X`\n"
+        + "FROM `A`\n"
+        + "UNION\n"
+        + "SELECT `Y`\n"
+        + "FROM `B`\n"
+        + "EXCEPT\n"
+        + "SELECT `Z`\n"
+        + "FROM `C`";
+    sql(sql).ok(expected);
+  }
+
+  @Test void testFromExpr() {
+    String sql0 = "select * from a cross join b";
+    String sql1 = "select * from (a cross join b)";
+    String expected = "SELECT *\n"
+        + "FROM `A`\n"
+        + "CROSS JOIN `B`";
+    sql(sql0).ok(expected);
+    sql(sql1).ok(expected);
+  }
+
+  /** Tests parsing parenthesized queries. */
+  @Test void testParenthesizedQueries() {
+    final String expected = "SELECT *\n"
+        + "FROM (SELECT *\n"
+        + "FROM `TAB`) AS `X`";
+    final String sql1 = "SELECT *\n"
+        + "FROM (((SELECT * FROM tab))) X";
+    final String sql2 = "SELECT *\n"
+        + "FROM ((((((((((((SELECT * FROM tab)))))))))))) X";
+    sql(sql1).ok(expected);
+    sql(sql2).ok(expected);
+
+    final String sql3 = "SELECT *\n"
+        + "FROM ((((((((((((SELECT * FROM t)))\n"
+        + "  cross join ((table t2)))))))))))";
+    final String expected3 = "SELECT *\n"
+        + "FROM (SELECT *\n"
+        + "FROM `T`)\n"
+        + "CROSS JOIN (TABLE `T2`)";
+    sql(sql3).ok(expected3);
+
+    // Adding an alias to the previous query makes it invalid
+    // (The error message and location could be improved)
+    final String sql4 = "SELECT *\n"
+        + "FROM ((((((((((((SELECT * FROM t)))\n"
+        + "  cross ^join^ ((table t2))))))))))) X";
+    final String sql5 = "SELECT *\n"
+        + "FROM ((((((((((((SELECT * FROM t)))\n"
+        + "  cross ^join^ ((table t2))))))))))) as X";
+    final String sql6 = "SELECT *\n"
+        + "FROM ((((((((((((SELECT * FROM t)))\n"
+        + "  cross ^join^ ((table t2))))))))))) as X (a, b, c)";
+    final String message = "Join expression encountered in illegal context";
+    sql(sql4).fails(message);
+    sql(sql5).fails(message);
+    sql(sql6).fails(message);
   }
 
   @Test void testProcedureCall() {
@@ -7875,39 +7443,6 @@ public class SqlParserTest {
     String jdbcKeywords = metadata.getJdbcKeywords();
     assertThat(jdbcKeywords.contains(",COLLECT,"), is(true));
     assertThat(!jdbcKeywords.contains(",SELECT,"), is(true));
-  }
-
-  /**
-   * Tests that reserved keywords are not added to the parser unintentionally.
-   * (Most keywords are non-reserved. The set of reserved words generally
-   * only changes with a new version of the SQL standard.)
-   *
-   * <p>If the new keyword added is intended to be a reserved keyword, update
-   * the {@link #RESERVED_KEYWORDS} list. If not, add the keyword to the
-   * non-reserved keyword list in the parser.
-   */
-  @Test void testNoUnintendedNewReservedKeywords() {
-    assumeTrue(isNotSubclass(), "don't run this test for sub-classes");
-    final SqlAbstractParserImpl.Metadata metadata =
-        fixture().parser().getMetadata();
-
-    final SortedSet<String> reservedKeywords = new TreeSet<>();
-    final SortedSet<String> keywords92 = keywords("92");
-    for (String s : metadata.getTokens()) {
-      if (metadata.isKeyword(s) && metadata.isReservedWord(s)) {
-        reservedKeywords.add(s);
-      }
-      // Check that the parser's list of SQL:92
-      // reserved words is consistent with keywords("92").
-      assertThat(s, metadata.isSql92ReservedWord(s),
-          is(keywords92.contains(s)));
-    }
-
-    final String reason = "The parser has at least one new reserved keyword. "
-        + "Are you sure it should be reserved? Difference:\n"
-        + DiffTestCase.diffLines(ImmutableList.copyOf(getReservedKeywords()),
-        ImmutableList.copyOf(reservedKeywords));
-    assertThat(reason, reservedKeywords, is(getReservedKeywords()));
   }
 
   @Test void testTabStop() {
@@ -8186,6 +7721,18 @@ public class SqlParserTest {
     sql(sql).ok(expected);
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-4746">[CALCITE-4746]
+   * Pivots with pivotAgg without alias fail with Babel Parser Implementation</a>.*/
+  @Test void testPivotWithoutAlias() {
+    final String sql = "SELECT * FROM emp\n"
+        + "PIVOT (sum(sal) FOR job in ('CLERK'))";
+    final String expected = "SELECT *\n"
+        + "FROM `EMP` PIVOT (SUM(`SAL`)"
+        + " FOR `JOB` IN ('CLERK'))";
+    sql(sql).ok(expected);
+  }
+
   /** In PIVOT, FOR clause must contain only simple identifiers. */
   @Test void testPivotErrorExpressionInFor() {
     final String sql = "SELECT * FROM emp\n"
@@ -8241,6 +7788,28 @@ public class SqlParserTest {
         + " (`C20_SS`, `C20_C`) AS ('CLERK', 20),"
         + " (`A20_SS`, `A20_C`) AS ('ANALYST', 20)))";
     sql(sql).ok(expected);
+  }
+
+  @Test void testPivotThroughShuttle() {
+    final String sql = ""
+        + "SELECT *\n"
+        + "FROM (SELECT job, deptno FROM \"EMP\")\n"
+        + "PIVOT (COUNT(*) AS \"COUNT\" FOR deptno IN (10, 50, 20))";
+    final String expected = ""
+        + "SELECT *\n"
+        + "FROM (SELECT `JOB`, `DEPTNO`\n"
+        + "FROM `EMP`) PIVOT (COUNT(*) AS `COUNT` FOR `DEPTNO` IN (10, 50, 20))";
+    final SqlNode sqlNode = sql(sql).node();
+
+    final SqlNode shuttled = sqlNode.accept(new SqlShuttle() {
+      @Override public @Nullable SqlNode visit(final SqlCall call) {
+        // Handler always creates a new copy of 'call'
+        CallCopyingArgHandler argHandler = new CallCopyingArgHandler(call, true);
+        call.getOperator().acceptCall(this, call, false, argHandler);
+        return argHandler.result();
+      }
+    });
+    assertThat(toLinux(shuttled.toString()), is(expected));
   }
 
   @Test void testMatchRecognize1() {
@@ -8549,7 +8118,7 @@ public class SqlParserTest {
         + "  ) mr";
     final String expected = "SELECT *\n"
         + "FROM `T` MATCH_RECOGNIZE(\n"
-        + "MEASURES (MATCH_NUMBER ()) AS `MATCH_NUM`, "
+        + "MEASURES (MATCH_NUMBER()) AS `MATCH_NUM`, "
         + "(CLASSIFIER()) AS `VAR_MATCH`, "
         + "`STRT`.`TS` AS `START_TS`, "
         + "LAST(`DOWN`.`TS`, 0) AS `BOTTOM_TS`, "
@@ -9294,6 +8863,14 @@ public class SqlParserTest {
             + "FORMAT JSON NULL ON NULL)");
   }
 
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-6003">[CALCITE-6003]
+   * JSON_ARRAY() with no arguments does not unparse correctly</a>. */
+  @Test void testEmptyJsonArray() {
+    expr("json_array()")
+        .ok("JSON_ARRAY()");
+  }
+
   @Test void testJsonArray() {
     expr("json_array('foo')")
         .ok("JSON_ARRAY('foo' ABSENT ON NULL)");
@@ -9510,8 +9087,8 @@ public class SqlParserTest {
         + "select * from emps";
     final String expected = "INSERT INTO `EMPS`\n"
         + "/*+ `PROPERTIES`(`K1` = 'v1', `K2` = 'v2'), `INDEX`(`IDX0`, `IDX1`) */\n"
-        + "(SELECT *\n"
-        + "FROM `EMPS`)";
+        + "SELECT *\n"
+        + "FROM `EMPS`";
     sql(sql).ok(expected);
   }
 
@@ -9558,7 +9135,7 @@ public class SqlParserTest {
         + ", `DEPTNO` = `T`.`DEPTNO`"
         + ", `SALARY` = (`T`.`SALARY` * 0.1)\n"
         + "WHEN NOT MATCHED THEN INSERT (`NAME`, `DEPT`, `SALARY`) "
-        + "(VALUES (ROW(`T`.`NAME`, 10, (`T`.`SALARY` * 0.15))))";
+        + "VALUES (ROW(`T`.`NAME`, 10, (`T`.`SALARY` * 0.15)))";
     sql(sql).ok(expected);
   }
 
@@ -9616,7 +9193,7 @@ public class SqlParserTest {
         + "from emp /* comment with 'quoted string'? */ as e\n"
         + "where deptno < ?3\n"
         + "and hiredate > ?4";
-    assertThat(hoisted.toString(), is(expected));
+    assertThat(hoisted, hasToString(expected));
 
     // As above, using the function explicitly.
     assertThat(hoisted.substitute(Hoist::ordinalString), is(expected));
@@ -9641,8 +9218,12 @@ public class SqlParserTest {
   protected static String varToStr(Hoist.Variable v) {
     if (v.node instanceof SqlLiteral) {
       SqlLiteral literal = (SqlLiteral) v.node;
+      SqlTypeName typeName = literal.getTypeName();
       return "[" + v.ordinal
-          + ":" + literal.getTypeName()
+          + ":"
+          + (typeName == SqlTypeName.UNKNOWN
+              ? ((SqlUnknownLiteral) literal).tag
+              : typeName.getName())
           + ":" + literal.toValue()
           + "]";
     } else {
@@ -9705,7 +9286,7 @@ public class SqlParserTest {
         @Nullable SqlDialect dialect, UnaryOperator<String> converter,
         List<String> expected) {
       final SqlNodeList sqlNodeList = parseStmtsAndHandleEx(factory, sap.sql);
-      assertThat(sqlNodeList.size(), is(expected.size()));
+      assertThat(sqlNodeList, hasSize(expected.size()));
 
       final SqlWriterConfig sqlWriterConfig =
           SQL_WRITER_CONFIG.withDialect(
@@ -9826,10 +9407,6 @@ public class SqlParserTest {
     }
   }
 
-  private boolean isNotSubclass() {
-    return this.getClass().equals(SqlParserTest.class);
-  }
-
   /**
    * Implementation of {@link Tester} which makes sure that the results of
    * unparsing a query are consistent with the original query.
@@ -9873,7 +9450,7 @@ public class SqlParserTest {
           .withClauseEndsLine(random.nextBoolean());
     }
 
-    private String toSqlString(SqlNodeList sqlNodeList,
+    static String toSqlString(SqlNodeList sqlNodeList,
         UnaryOperator<SqlWriterConfig> transform) {
       return sqlNodeList.stream()
           .map(node -> node.toSqlString(transform).getSql())
@@ -9889,9 +9466,9 @@ public class SqlParserTest {
       return constants[random.nextInt(constants.length)];
     }
 
-    private void checkList(SqlNodeList sqlNodeList,
+    static void checkList(SqlNodeList sqlNodeList,
         UnaryOperator<String> converter, List<String> expected) {
-      assertThat(sqlNodeList.size(), is(expected.size()));
+      assertThat(sqlNodeList, hasSize(expected.size()));
 
       for (int i = 0; i < sqlNodeList.size(); i++) {
         SqlNode sqlNode = sqlNodeList.get(i);

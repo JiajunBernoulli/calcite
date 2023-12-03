@@ -14,11 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import com.gradle.enterprise.gradleplugin.internal.extension.BuildScanExtensionWithHiddenFeatures
+
 pluginManagement {
     plugins {
         fun String.v() = extra["$this.version"].toString()
         fun PluginDependenciesSpec.idv(id: String, key: String = id) = id(id) version key.v()
 
+        idv("com.gradle.enterprise")
+        idv("com.gradle.common-custom-user-data-gradle-plugin")
         idv("com.autonomousapps.dependency-analysis")
         idv("org.checkerframework")
         idv("com.github.autostyle")
@@ -33,11 +37,13 @@ pluginManagement {
         idv("com.github.vlsi.stage-vote-release", "com.github.vlsi.vlsi-release-plugins")
         idv("com.google.protobuf")
         idv("de.thetaphi.forbiddenapis")
+        idv("jacoco")
         idv("me.champeau.gradle.jmh")
         idv("net.ltgt.errorprone")
         idv("org.jetbrains.gradle.plugin.idea-ext")
         idv("org.nosphere.apache.rat")
         idv("org.owasp.dependencycheck")
+        idv("org.sonarqube")
         kotlin("jvm") version "kotlin".v()
     }
     if (extra.has("enableMavenLocal") && extra["enableMavenLocal"].toString().ifBlank { "true" }.toBoolean()) {
@@ -49,7 +55,8 @@ pluginManagement {
 }
 
 plugins {
-    `gradle-enterprise`
+    id("com.gradle.enterprise")
+    id("com.gradle.common-custom-user-data-gradle-plugin")
     id("com.github.burrunan.s3-build-cache")
 }
 
@@ -98,12 +105,18 @@ fun property(name: String) =
 
 val isCiServer = System.getenv().containsKey("CI")
 
-if (isCiServer) {
-    gradleEnterprise {
-        buildScan {
-            termsOfServiceUrl = "https://gradle.com/terms-of-service"
-            termsOfServiceAgree = "yes"
-            tag("CI")
+gradleEnterprise {
+    server = "https://ge.apache.org"
+    allowUntrustedServer = false
+
+    buildScan {
+        capture { isTaskInputFiles = true }
+        isUploadInBackground = !isCiServer
+        publishAlways()
+        this as BuildScanExtensionWithHiddenFeatures
+        publishIfAuthenticated()
+        obfuscation {
+            ipAddresses { addresses -> addresses.map { "0.0.0.0" } }
         }
     }
 }

@@ -86,7 +86,7 @@ class ScrollingTest {
     final String query = String.format(Locale.ROOT, "select _MAP['value'] as v from "
         + "\"elastic\".\"%s\"", NAME);
 
-    for (int fetchSize: Arrays.asList(1, 2, 3, SIZE / 2, SIZE - 1, SIZE, SIZE + 1, 2 * SIZE)) {
+    for (int fetchSize : Arrays.asList(1, 2, 3, SIZE / 2, SIZE - 1, SIZE, SIZE + 1, 2 * SIZE)) {
       CalciteAssert.that()
           .with(newConnectionFactory(fetchSize))
           .query(query)
@@ -98,6 +98,7 @@ class ScrollingTest {
   /**
    * Ensures there are no pending scroll contexts in elastic search cluster.
    * Queries {@code /_nodes/stats/indices/search} endpoint.
+   *
    * @see <a href="https://www.elastic.co/guide/en/elasticsearch/reference/current/indices-stats.html">Indices Stats</a>
    */
   private void assertNoActiveScrolls() throws IOException  {
@@ -108,7 +109,8 @@ class ScrollingTest {
     try (InputStream is = response.getEntity().getContent()) {
       final ObjectNode node = NODE.mapper().readValue(is, ObjectNode.class);
       final String path = "/indices/search/scroll_current";
-      final JsonNode scrollCurrent = node.with("nodes").elements().next().at(path);
+      final JsonNode scrollCurrent =
+          node.get("nodes").elements().next().at(path);
       if (scrollCurrent.isMissingNode()) {
         throw new IllegalStateException("Couldn't find node at " + path);
       }

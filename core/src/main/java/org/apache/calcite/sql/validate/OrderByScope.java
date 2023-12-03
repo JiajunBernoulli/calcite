@@ -34,13 +34,13 @@ import static org.apache.calcite.util.Static.RESOURCE;
  * Represents the name-resolution context for expressions in an ORDER BY clause.
  *
  * <p>In some dialects of SQL, the ORDER BY clause can reference column aliases
- * in the SELECT clause. For example, the query</p>
+ * in the SELECT clause. For example, the query
  *
  * <blockquote><code>SELECT empno AS x<br>
  * FROM emp<br>
  * ORDER BY x</code></blockquote>
  *
- * <p>is valid.</p>
+ * <p>is valid.
  */
 public class OrderByScope extends DelegatingScope {
   //~ Instance fields --------------------------------------------------------
@@ -101,7 +101,7 @@ public class OrderByScope extends DelegatingScope {
   private int aliasCount(SqlNameMatcher nameMatcher, String name) {
     int n = 0;
     for (SqlNode s : getSelectList(select)) {
-      final String alias = SqlValidatorUtil.getAlias(s, -1);
+      final @Nullable String alias = SqlValidatorUtil.alias(s);
       if (alias != null && nameMatcher.matches(alias, name)) {
         n++;
       }

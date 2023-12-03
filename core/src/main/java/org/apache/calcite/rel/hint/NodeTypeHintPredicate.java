@@ -24,7 +24,9 @@ import org.apache.calcite.rel.core.Filter;
 import org.apache.calcite.rel.core.Join;
 import org.apache.calcite.rel.core.Project;
 import org.apache.calcite.rel.core.SetOp;
+import org.apache.calcite.rel.core.Snapshot;
 import org.apache.calcite.rel.core.Sort;
+import org.apache.calcite.rel.core.TableFunctionScan;
 import org.apache.calcite.rel.core.TableScan;
 import org.apache.calcite.rel.core.Values;
 import org.apache.calcite.rel.core.Window;
@@ -99,7 +101,17 @@ public class NodeTypeHintPredicate implements HintPredicate {
     /**
      * The hint would be propagated to the Window nodes.
      */
-    WINDOW(Window.class);
+    WINDOW(Window.class),
+
+    /**
+     * The hint would be propagated to the Snapshot nodes.
+     */
+    SNAPSHOT(Snapshot.class),
+
+    /**
+     * The hint would be propagated to the TableFunctionScan nodes.
+     */
+    TABLE_FUNCTION_SCAN(TableFunctionScan.class);
 
     /** Relational expression clazz that the hint can apply to. */
     @SuppressWarnings("ImmutableEnumChecker")

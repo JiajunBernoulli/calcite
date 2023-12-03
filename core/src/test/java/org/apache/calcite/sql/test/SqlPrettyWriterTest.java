@@ -18,6 +18,7 @@ package org.apache.calcite.sql.test;
 
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.SqlSelect;
+import org.apache.calcite.sql.SqlWith;
 import org.apache.calcite.sql.SqlWriter;
 import org.apache.calcite.sql.SqlWriterConfig;
 import org.apache.calcite.sql.parser.SqlParseException;
@@ -25,14 +26,17 @@ import org.apache.calcite.sql.parser.SqlParser;
 import org.apache.calcite.sql.pretty.SqlPrettyWriter;
 import org.apache.calcite.test.DiffRepository;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import static org.apache.calcite.test.Matchers.isLinux;
 
+import static org.hamcrest.CoreMatchers.instanceOf;
+import static org.hamcrest.CoreMatchers.notNullValue;
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.instanceOf;
-import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.hasToString;
 
 /**
  * Unit test for {@link SqlPrettyWriter}.
@@ -49,8 +53,19 @@ class SqlPrettyWriterTest {
   private static final SqlPrettyWriterFixture LOCAL_FIXTURE =
       FIXTURE.withDiffRepos(DiffRepository.lookup(SqlPrettyWriterTest.class));
 
+  @Nullable
+  private static DiffRepository diffRepos = null;
+
+  @AfterAll
+  public static void checkActualAndReferenceFiles() {
+    if (diffRepos != null) {
+      diffRepos.checkActualAndReferenceFiles();
+    }
+  }
+
   /** Returns the default fixture for tests. Sub-classes may override. */
   protected SqlPrettyWriterFixture fixture() {
+    diffRepos = LOCAL_FIXTURE.diffRepos();
     return LOCAL_FIXTURE;
   }
 
@@ -398,7 +413,7 @@ class SqlPrettyWriterTest {
           assertThat(root, instanceOf(SqlSelect.class));
           SqlNode from = ((SqlSelect) root).getFrom();
           assertThat(from, notNullValue());
-          assertThat(from.toString(), isLinux(expectedJoinString));
+          assertThat(from, hasToString(isLinux(expectedJoinString)));
           return from;
         });
   }
@@ -470,6 +485,29 @@ class SqlPrettyWriterTest {
         .withWriter(w -> w.withUpdateSetListNewline(false)
             .withClauseStartsLine(false))
         .check();
+  }
+
+  @Test void testInsert() {
+    sql("insert into t1 select * from t2")
+        .check();
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-6102">[CALCITE-6102]
+   * SqlWriter in SqlInsert's unparse start a list but does not end it</a>. */
+  @Test void testSqlWithBodyIsSqlInsert() throws SqlParseException {
+    final String withSql = "with tmp as (select * from t1) select 1";
+    final String insertSql = "insert into t2 select * from tmp";
+    final String expectedSql = "WITH `TMP` AS (SELECT *\n"
+        + "FROM `T1`) INSERT INTO `T2`\n"
+        + "SELECT *\n"
+        + "FROM `TMP`";
+    final SqlNode sqlInsert = SqlParser.create(insertSql).parseStmt();
+    final SqlNode sqlNode = SqlParser.create(withSql).parseQuery();
+    assertThat(sqlNode, instanceOf(SqlWith.class));
+    final SqlWith sqlWith = (SqlWith) sqlNode;
+    sqlWith.setOperand(1, sqlInsert);
+    assertThat(sqlWith, hasToString(isLinux(expectedSql)));
   }
 
   public static void main(String[] args) throws SqlParseException {

@@ -28,6 +28,7 @@ import org.apache.calcite.rel.core.Intersect;
 import org.apache.calcite.rel.core.Join;
 import org.apache.calcite.rel.core.Minus;
 import org.apache.calcite.rel.core.Project;
+import org.apache.calcite.rel.core.Sample;
 import org.apache.calcite.rel.core.Sort;
 import org.apache.calcite.rel.core.TableModify;
 import org.apache.calcite.rel.core.TableScan;
@@ -70,7 +71,7 @@ public class RelMdRowCount
   @SuppressWarnings("CatchAndPrintStackTrace")
   public @Nullable Double getRowCount(RelSubset subset, RelMetadataQuery mq) {
     if (!Bug.CALCITE_1048_FIXED) {
-      return mq.getRowCount(subset.getBestOrOriginal());
+      return mq.getRowCount(subset.stripped());
     }
     Double v = null;
     for (RelNode r : subset.getRels()) {
@@ -169,6 +170,12 @@ public class RelMdRowCount
     return limit < rowCount ? limit : rowCount;
   }
 
+  public @Nullable Double getRowCount(Sample rel, RelMetadataQuery mq) {
+    final Double inputRowCount = mq.getRowCount(rel.getInput());
+    final double sampleRate = rel.getSamplingParameters().sampleRate.doubleValue();
+    return sampleRate * inputRowCount;
+  }
+
   // Covers Converter, Interpreter
   public @Nullable Double getRowCount(SingleRel rel, RelMetadataQuery mq) {
     return mq.getRowCount(rel.getInput());
@@ -197,7 +204,12 @@ public class RelMdRowCount
     return distinctRowCount;
   }
 
-  public Double getRowCount(TableScan rel, RelMetadataQuery mq) {
+  public @Nullable Double getRowCount(TableScan rel, RelMetadataQuery mq) {
+    final BuiltInMetadata.RowCount.Handler handler =
+        rel.getTable().unwrap(BuiltInMetadata.RowCount.Handler.class);
+    if (handler != null) {
+      return handler.getRowCount(rel, mq);
+    }
     return rel.estimateRowCount(mq);
   }
 
