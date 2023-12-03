@@ -48,6 +48,9 @@ public interface CalciteResource {
   @BaseMessage("APPLY operator is not allowed under the current SQL conformance level")
   ExInst<CalciteException> applyNotAllowed();
 
+  @BaseMessage("VALUE is not allowed under the current SQL conformance level")
+  ExInst<CalciteException> valueNotAllowed();
+
   @BaseMessage("Illegal {0} literal ''{1}'': {2}")
   ExInst<CalciteException> illegalLiteral(String a0, String a1, String a2);
 
@@ -62,6 +65,9 @@ public interface CalciteResource {
 
   @BaseMessage("Geo-spatial extensions and the GEOMETRY data type are not enabled")
   ExInst<SqlValidatorException> geometryDisabled();
+
+  @BaseMessage("Proj4J EPSG is missing from the classpath; to resolve this problem, download the EPSG data set and agree to its terms of use")
+  ExInst<CalciteException> proj4jEpsgIsMissing();
 
   @BaseMessage("Illegal INTERVAL literal {0}; at {1}")
   @Property(name = "SQLSTATE", value = "42000")
@@ -93,6 +99,9 @@ public interface CalciteResource {
 
   @BaseMessage("Illegal binary string {0}")
   ExInst<CalciteException> illegalBinaryString(String a0);
+
+  @BaseMessage("Illegal array expression ''{0}''")
+  ExInst<CalciteException> illegalArrayExpression(String a0);
 
   @BaseMessage("''FROM'' without operands preceding it is illegal")
   ExInst<CalciteException> illegalFromEmpty();
@@ -326,6 +335,9 @@ public interface CalciteResource {
   @BaseMessage("OVER clause is necessary for window functions")
   ExInst<SqlValidatorException> absentOverClause();
 
+  @BaseMessage("Argument to function ''{0}'' must be a measure")
+  ExInst<SqlValidatorException> argumentMustBeMeasure(String functionName);
+
   @BaseMessage("Window ''{0}'' not found")
   ExInst<SqlValidatorException> windowNotFound(String a0);
 
@@ -355,6 +367,12 @@ public interface CalciteResource {
 
   @BaseMessage("Aggregate expressions cannot be nested")
   ExInst<SqlValidatorException> nestedAggIllegal();
+
+  @BaseMessage("Measure expressions can only occur within AGGREGATE function")
+  ExInst<SqlValidatorException> measureIllegal();
+
+  @BaseMessage("Measure expressions can only occur within a GROUP BY query")
+  ExInst<SqlValidatorException> measureMustBeInAggregateQuery();
 
   @BaseMessage("FILTER must not contain aggregate expression")
   ExInst<SqlValidatorException> aggregateInFilterIllegal();

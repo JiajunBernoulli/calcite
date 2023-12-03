@@ -40,10 +40,12 @@ import org.apache.calcite.rel.logical.LogicalTableModify;
 import org.apache.calcite.rel.rules.CoreRules;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.sql.SqlExplainLevel;
+import org.apache.calcite.sql.fun.SqlLibrary;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql.validate.SqlConformance;
 import org.apache.calcite.sql.validate.SqlConformanceEnum;
 import org.apache.calcite.sql.validate.SqlDelegatingConformance;
+import org.apache.calcite.test.catalog.MockCatalogReaderExtended;
 import org.apache.calcite.util.Bug;
 import org.apache.calcite.util.TestUtil;
 import org.apache.calcite.util.Util;
@@ -2597,6 +2599,15 @@ class SqlToRelConverterTest extends SqlToRelTestBase {
   }
 
   /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5377">[CALCITE-5377]
+   * RelFieldTrimmer support Sort with dynamic param</a>. */
+  @Test void testDynamicParameterSortWithTrim() {
+    final String sql = "select ename from "
+        + "(select * from emp order by sal limit ? offset ?) a";
+    sql(sql).withTrim(true).ok();
+  }
+
+  /** Test case for
    * <a href="https://issues.apache.org/jira/browse/CALCITE-3183">[CALCITE-3183]
    * Trimming method for Filter rel uses wrong traitSet</a>. */
   @SuppressWarnings("rawtypes")
@@ -4408,6 +4419,22 @@ class SqlToRelConverterTest extends SqlToRelTestBase {
     final String sql = "select avg(empno) within distinct (deptno)\n"
         + "from emp";
     sql(sql).ok();
+  }
+
+  /** Tests a reference to a measure column in an underlying table. The measure
+   * is treated as a black box: it is not expanded, just wrapped in a call to
+   * AGGREGATE. */
+  @Test void testMeasureRef() {
+    final String sql = "select deptno, aggregate(count_plus_100) as c\n"
+        + "from empm\n"
+        + "group by deptno";
+    fixture()
+        .withFactory(c ->
+            c.withOperatorTable(t ->
+                SqlValidatorTest.operatorTableFor(SqlLibrary.CALCITE)))
+        .withCatalogReader(MockCatalogReaderExtended::create)
+        .withSql(sql)
+        .ok();
   }
 
   /** Test case for:

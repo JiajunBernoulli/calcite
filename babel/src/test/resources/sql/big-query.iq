@@ -1197,6 +1197,8 @@ SELECT
 # Display of results may differ, depending upon the environment and
 # time zone where this query was executed.
 !if (false) {
+# Enable when we have TIMESTAMP() function,
+# and when we allow "+00" timezone offset in timestamp values.
 SELECT
   TIMESTAMP("2008-12-25 15:30:00+00") AS original,
   TIMESTAMP_ADD(TIMESTAMP "2008-12-25 15:30:00+00", INTERVAL 10 MINUTE) AS later;
@@ -1205,8 +1207,24 @@ SELECT
 +-------------------------+-------------------------+
 | 2008-12-25 15:30:00 UTC | 2008-12-25 15:40:00 UTC |
 +-------------------------+-------------------------+
+(1 row)
+
 !ok
 !}
+
+# As previous, but uses TIMESTAMP literal rather than function,
+# and "+00" timezone offsets have been removed.
+SELECT
+  TIMESTAMP "2008-12-25 15:30:00" AS original,
+  TIMESTAMP_ADD(TIMESTAMP "2008-12-25 15:30:00", INTERVAL 10 MINUTE) AS later;
++---------------------+---------------------+
+| original            | later               |
++---------------------+---------------------+
+| 2008-12-25 15:30:00 | 2008-12-25 15:40:00 |
++---------------------+---------------------+
+(1 row)
+
+!ok
 
 #####################################################################
 # DATE_SUB
@@ -1604,43 +1622,42 @@ SELECT
 
 # Display of results may differ, depending upon the environment and
 # time zone where this query was executed.
-!if (false) {
 SELECT
-  TIMESTAMP("2010-07-07 10:20:00+00") AS later_timestamp,
-  TIMESTAMP("2008-12-25 15:30:00+00") AS earlier_timestamp,
-  TIMESTAMP_DIFF(TIMESTAMP "2010-07-07 10:20:00+00", TIMESTAMP "2008-12-25 15:30:00+00", HOUR) AS hours;
-+-------------------------+-------------------------+-------+
-| later_timestamp         | earlier_timestamp       | hours |
-+-------------------------+-------------------------+-------+
-| 2010-07-07 10:20:00 UTC | 2008-12-25 15:30:00 UTC | 13410 |
-+-------------------------+-------------------------+-------+
+  TIMESTAMP "2010-07-07 10:20:00" AS later_timestamp,
+  TIMESTAMP "2008-12-25 15:30:00" AS earlier_timestamp,
+  TIMESTAMP_DIFF(TIMESTAMP "2010-07-07 10:20:00", TIMESTAMP "2008-12-25 15:30:00", HOUR) AS hours;
++---------------------+---------------------+-------+
+| later_timestamp     | earlier_timestamp   | hours |
++---------------------+---------------------+-------+
+| 2010-07-07 10:20:00 | 2008-12-25 15:30:00 | 13410 |
++---------------------+---------------------+-------+
+(1 row)
+
 !ok
-!}
 
 # In the following example, the first timestamp occurs
 # before the second timestamp, resulting in a negative output.
-!if (false) {
-SELECT TIMESTAMP_DIFF(TIMESTAMP "2018-08-14", TIMESTAMP "2018-10-14", DAY);
+SELECT TIMESTAMP_DIFF(TIMESTAMP "2018-08-14", TIMESTAMP "2018-10-14", DAY) AS negative_diff;
 +---------------+
 | negative_diff |
 +---------------+
-| -61           |
+|           -61 |
 +---------------+
+(1 row)
+
 !ok
-!}
 
 # In this example, the result is 0 because only the number
 # of whole specified HOUR intervals are included.
-!if (false) {
-SELECT TIMESTAMP_DIFF("2001-02-01 01:00:00", "2001-02-01 00:00:01", HOUR);
+SELECT TIMESTAMP_DIFF("2001-02-01 01:00:00", "2001-02-01 00:00:01", HOUR) AS negative_diff;
 +---------------+
 | negative_diff |
 +---------------+
-| 0             |
+|             0 |
 +---------------+
-!ok
-!}
+(1 row)
 
+!ok
 #####################################################################
 # DATE_TRUNC
 #
@@ -2518,5 +2535,64 @@ SELECT PARSE_TIMESTAMP("%c", "Thu Dec 25 07:30:00 2008") AS parsed;
 +-------------------------+
 !ok
 !}
+
+#####################################################################
+# STRING and BYTES functions ########################################
+
+#####################################################################
+# ENDS_WITH(value1, value2)
+#
+# Takes two STRING or BYTES values. Returns TRUE if the second
+# value is a suffix of the first.
+#
+# This function supports specifying collation.
+WITH items AS (
+  SELECT '1234' as item UNION ALL
+  SELECT '123' UNION ALL
+  SELECT '' UNION ALL
+  SELECT NULL
+)
+SELECT
+  item, ENDS_WITH(item, '34') as example
+FROM items;
++------+---------+
+| item | example |
++------+---------+
+|      | false   |
+| 123  | false   |
+| 1234 | true    |
+|      |         |
++------+---------+
+(4 rows)
+
+!ok
+
+#####################################################################
+# STARTS_WITH(value1, value2)
+#
+# Takes two STRING or BYTES values. Returns TRUE if the second
+# value is a prefix of the first.
+#
+# This function supports specifying collation.
+WITH items AS (
+  SELECT 'foo' as item UNION ALL
+  SELECT 'bar' UNION ALL
+  SELECT 'baz' UNION ALL
+  SELECT NULL
+)
+SELECT
+  item, STARTS_WITH(item, 'b') as example
+FROM items;
++------+---------+
+| item | example |
++------+---------+
+| bar  | true    |
+| baz  | true    |
+| foo  | false   |
+|      |         |
++------+---------+
+(4 rows)
+
+!ok
 
 # End big-query.iq

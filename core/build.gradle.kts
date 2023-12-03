@@ -98,6 +98,10 @@ dependencies {
     testImplementation(kotlin("stdlib-jdk8"))
     testImplementation(kotlin("test"))
     testImplementation(kotlin("test-junit5"))
+
+    // proj4j-epsg must not be converted to 'implementation' due to its license
+    testRuntimeOnly("org.locationtech.proj4j:proj4j-epsg")
+
     testRuntimeOnly("org.apache.logging.log4j:log4j-slf4j-impl")
 }
 

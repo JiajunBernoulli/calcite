@@ -7262,6 +7262,22 @@ LogicalProject(DEPTNO=[10], EXPR$1=[11], EXPR$2=[+($0, 10)])
 ]]>
     </Resource>
   </TestCase>
+  <TestCase name="testPullConstantIntoProjectWithIsNotDistinctFromDate">
+    <Resource name="planBefore">
+      <![CDATA[
+LogicalProject(HIREDATE=[$4])
+  LogicalFilter(condition=[IS NOT DISTINCT FROM($4, 2020-12-11)])
+    LogicalTableScan(table=[[scott, EMP]])
+]]>
+    </Resource>
+    <Resource name="planAfter">
+      <![CDATA[
+LogicalProject(HIREDATE=[CAST(2020-12-11):DATE])
+  LogicalFilter(condition=[IS NOT DISTINCT FROM($4, 2020-12-11)])
+    LogicalTableScan(table=[[scott, EMP]])
+]]>
+    </Resource>
+  </TestCase>
   <TestCase name="testPullConstantIntoProjectWithIsNotDistinctFromForNull">
     <Resource name="sql">
       <![CDATA[select mgr, deptno
@@ -12346,6 +12362,33 @@ LogicalJoin(condition=[=($7, $9)], joinType=[semi])
   LogicalTableScan(table=[[CATALOG, SALES, EMP]])
   LogicalProject(DEPTNO=[$0])
     LogicalTableScan(table=[[CATALOG, SALES, DEPT]])
+]]>
+    </Resource>
+  </TestCase>
+  <TestCase name="testSemiJoinRuleWithJoinOnUniqueInputWithAlias">
+    <Resource name="sql">
+      <![CDATA[select emp.deptno as department_id, emp.sal as salary
+from emp
+where exists(select * from dept where emp.deptno = dept.deptno)]]>
+    </Resource>
+    <Resource name="planBefore">
+      <![CDATA[
+LogicalProject(DEPARTMENT_ID=[$1], SALARY=[$0])
+  LogicalJoin(condition=[=($1, $2)], joinType=[inner])
+    LogicalProject(SAL=[$5], DEPTNO=[$7])
+      LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+    LogicalProject(DEPTNO=[$0])
+      LogicalTableScan(table=[[CATALOG, SALES, DEPT]])
+]]>
+    </Resource>
+    <Resource name="planAfter">
+      <![CDATA[
+LogicalProject(DEPARTMENT_ID=[$1], SALARY=[$0])
+  LogicalJoin(condition=[=($1, $2)], joinType=[semi])
+    LogicalProject(SAL=[$5], DEPTNO=[$7])
+      LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+    LogicalProject(DEPTNO=[$0])
+      LogicalTableScan(table=[[CATALOG, SALES, DEPT]])
 ]]>
     </Resource>
   </TestCase>
